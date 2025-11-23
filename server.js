@@ -1,4 +1,7 @@
 // server.js - YouTube WebSub -> Telegram with Neon (PostgreSQL) + Admin UI
+// Mô hình:
+// - "Account" = nhóm kênh (Quyet, Huong, ...), không gắn trực tiếp Telegram
+// - Tất cả video mới được gửi đến danh sách chat_id trong TELEGRAM_CHAT_IDS
 
 const express = require('express');
 const cors = require('cors');
@@ -7,9 +10,15 @@ const fetch = require('node-fetch');
 const { Pool } = require('pg');
 const axios = require('axios');
 
+// Env bắt buộc
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const HOST_URL = process.env.HOST_URL || '';
 const DATABASE_URL = process.env.DATABASE_URL || '';
+const TELEGRAM_CHAT_IDS = (process.env.TELEGRAM_CHAT_IDS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const HUB_URL = 'https://pubsubhubbub.appspot.com/subscribe';
 const PORT = process.env.PORT || 3000;
 
@@ -22,12 +31,17 @@ if (!HOST_URL) {
   process.exit(1);
 }
 if (!DATABASE_URL) {
-  console.error('Missing DATABASE_URL');
-  console.error('Set it to your Neon connection string.');
+  console.error('Missing DATABASE_URL (Neon connection string).');
+  process.exit(1);
+}
+if (TELEGRAM_CHAT_IDS.length === 0) {
+  console.error(
+    'Missing TELEGRAM_CHAT_IDS (comma-separated chat ids, e.g. "1007258280,5670772623").'
+  );
   process.exit(1);
 }
 
-// pg pool (Neon: phải bật ssl)
+// pg pool (Neon dùng SSL)
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: { rejectUnauthorized: false }
@@ -71,6 +85,21 @@ async function sendTelegram(chat_id, text) {
       err.response ? err.response.data : err.message
     );
     throw err;
+  }
+}
+
+// gửi message tới tất cả chat_id cấu hình trong TELEGRAM_CHAT_IDS
+async function sendToAllTargets(text) {
+  if (!TELEGRAM_CHAT_IDS.length) {
+    console.warn('No TELEGRAM_CHAT_IDS configured');
+    return;
+  }
+  for (const chatId of TELEGRAM_CHAT_IDS) {
+    try {
+      await sendTelegram(chatId, text);
+    } catch (e) {
+      console.error('Failed to send to', chatId, e.message || e);
+    }
   }
 }
 
@@ -129,22 +158,25 @@ async function subscribeChannel(channelId) {
 }
 
 // ---------- API: ACCOUNTS & FEEDS ----------
+// "Account" = nhóm kênh logic (Quyet, Huong, ...)
+// Bảng accounts vẫn có cột telegram_chat_id nhưng không dùng nữa (đặt 'unused')
 
-// Tạo account mới
+// Tạo account mới (chỉ cần name)
 app.post('/account', async (req, res) => {
   try {
     const { name, telegram_chat_id } = req.body;
-    if (!name || !telegram_chat_id) {
-      return res
-        .status(400)
-        .json({ error: 'name and telegram_chat_id required' });
+    if (!name) {
+      return res.status(400).json({ error: 'name required' });
     }
+
+    // cột telegram_chat_id vẫn NOT NULL nên gán 'unused' nếu không truyền
+    const chatIdStored = telegram_chat_id || 'unused';
 
     const result = await dbQuery(
       `insert into accounts (name, telegram_chat_id)
        values ($1, $2)
        returning id, name, telegram_chat_id`,
-      [name, telegram_chat_id]
+      [name, chatIdStored]
     );
 
     const row = result.rows[0];
@@ -181,6 +213,7 @@ app.get('/accounts', async (req, res) => {
     const result = accRes.rows.map((a) => ({
       id: a.id,
       name: a.name,
+      // telegram_chat_id không còn ý nghĩa, không cần dùng trên UI
       telegram_chat_id: a.telegram_chat_id,
       feeds: feedMap[a.id] || []
     }));
@@ -192,7 +225,7 @@ app.get('/accounts', async (req, res) => {
   }
 });
 
-// Lấy 1 account (nếu cần)
+// Lấy 1 account
 app.get('/account/:id', async (req, res) => {
   const id = req.params.id;
   try {
@@ -227,7 +260,6 @@ app.delete('/account/:id', async (req, res) => {
     if (r.rowCount === 0) {
       return res.status(404).json({ error: 'account not found' });
     }
-    // feeds sẽ bị xóa theo ON DELETE CASCADE
     res.json({ ok: true });
   } catch (err) {
     console.error('DELETE /account/:id error', err);
@@ -341,7 +373,6 @@ app.post('/resolve-channel', async (req, res) => {
     }
     const channelId = m[1];
     if (!channelId.startsWith('UC')) {
-      // YouTube channelId chuẩn bắt đầu bằng UC
       return res.status(400).json({ error: 'invalid channelId format' });
     }
     res.json({ channelId });
@@ -352,8 +383,7 @@ app.post('/resolve-channel', async (req, res) => {
 });
 
 // ---------- WEBHOOK (YouTube) + Lọc video < 20h + chống trùng ----------
-
-// Lưu ý: cần có bảng videos (đã tạo qua SQL trước đó):
+// Cần bảng videos (đã tạo):
 // CREATE TABLE IF NOT EXISTS videos (
 //   video_id TEXT PRIMARY KEY,
 //   channel_id TEXT NOT NULL,
@@ -448,9 +478,9 @@ app.post('/webhook', async (req, res) => {
         [videoId, entryChannelId, publishedAt.toISOString()]
       );
 
-      // 5) Tìm các account quan tâm kênh này và gửi Telegram
+      // 5) Tìm các account quan tâm kênh này
       const accounts = await dbQuery(
-        `select a.id, a.name, a.telegram_chat_id
+        `select a.id, a.name
          from accounts a
          join feeds f on f.account_id = a.id
          where f.channel_id = $1`,
@@ -467,19 +497,16 @@ app.post('/webhook', async (req, res) => {
         continue;
       }
 
+      // 6) Gửi message tới tất cả chat_id global, mỗi account một message
       const url = `https://youtu.be/${videoId}`;
       for (const acc of accounts.rows) {
         const text = `[${escapeHtml(
           acc.name
         )}] New video: <b>${escapeHtml(title)}</b>\n${url}`;
         try {
-          await sendTelegram(acc.telegram_chat_id, text);
+          await sendToAllTargets(text);
         } catch (err) {
-          console.error(
-            'Failed to send to',
-            acc.telegram_chat_id,
-            err.message || err
-          );
+          console.error('Failed to send broadcast', err.message || err);
         }
       }
     }
@@ -492,6 +519,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ---------- ADMIN UI (/admin) ----------
+// Quản lý account (tên) + channel theo account, thêm channel bằng URL
 
 app.get('/admin', (req, res) => {
   const html = `<!DOCTYPE html>
@@ -603,20 +631,16 @@ app.get('/admin', (req, res) => {
   </style>
 </head>
 <body>
-  <h1>Youtube WebSub → Telegram Admin</h1>
+  <h1>YouTube WebSub → Telegram Admin</h1>
 
   <div id="status" class="status"></div>
 
   <div class="card">
-    <h2>Thêm tài khoản</h2>
+    <h2>Thêm tài khoản (nhóm kênh)</h2>
     <div class="row">
       <div>
-        <label>Tên (hiển thị trong message)</label>
-        <input id="newName" placeholder="VD: Quyet" />
-      </div>
-      <div>
-        <label>Telegram chat_id</label>
-        <input id="newChatId" placeholder="VD: 1007258280" />
+        <label>Tên account</label>
+        <input id="newName" placeholder="VD: Quyet, Huong" />
       </div>
       <div style="align-self:flex-end;">
         <button id="btnAddAccount">Thêm tài khoản</button>
@@ -634,7 +658,6 @@ const statusEl = document.getElementById('status');
 const accountsEl = document.getElementById('accounts');
 const btnAddAccount = document.getElementById('btnAddAccount');
 const inpName = document.getElementById('newName');
-const inpChat = document.getElementById('newChatId');
 
 function setStatus(msg, ok = true) {
   statusEl.textContent = msg || '';
@@ -677,7 +700,6 @@ async function loadAccounts() {
         <div class="account-header">
           <div>
             <div><b>${acc.name}</b> <span class="pill">${acc.id}</span></div>
-            <div style="font-size:12px;color:#4b5563;">chat_id: ${acc.telegram_chat_id}</div>
           </div>
           <div>
             <button class="small danger" data-del-account="${acc.id}">Xóa tài khoản</button>
@@ -720,20 +742,18 @@ async function loadAccounts() {
 
 btnAddAccount.addEventListener('click', async () => {
   const name = inpName.value.trim();
-  const chatId = inpChat.value.trim();
-  if (!name || !chatId) {
-    setStatus('Nhập đầy đủ tên và chat_id', false);
+  if (!name) {
+    setStatus('Nhập tên account', false);
     return;
   }
   btnAddAccount.disabled = true;
   try {
     await api('/account', {
       method: 'POST',
-      body: JSON.stringify({ name, telegram_chat_id: chatId })
+      body: JSON.stringify({ name })
     });
     setStatus('Đã thêm tài khoản ' + name, true);
     inpName.value = '';
-    inpChat.value = '';
     await loadAccounts();
   } catch (e) {
     setStatus('Lỗi thêm tài khoản: ' + e.message, false);
