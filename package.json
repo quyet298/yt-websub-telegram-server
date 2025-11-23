@@ -1,0 +1,17 @@
+{
+  "name": "yt-websub-telegram-server",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.0",
+    "body-parser": "^1.19.0",
+    "xml2js": "^0.4.23",
+    "node-fetch": "^2.6.1",
+    "lowdb": "^3.0.0",
+    "shortid": "^2.2.16",
+    "axios": "^1.0.0"
+  }
+}
