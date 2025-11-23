@@ -522,323 +522,329 @@ app.post('/webhook', async (req, res) => {
 // Quản lý account (tên) + channel theo account, thêm channel bằng URL
 
 app.get('/admin', (req, res) => {
-  const html = `<!DOCTYPE html>
-<html lang="vi">
-<head>
-  <meta charset="UTF-8" />
-  <title>YouTube WebSub Admin</title>
-  <style>
-    body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f4f4f5;
-      margin: 0;
-      padding: 20px;
-    }
-    h1 {
-      margin-top: 0;
-    }
-    .card {
-      background: #ffffff;
-      border-radius: 8px;
-      padding: 16px;
-      margin-bottom: 16px;
-      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
-    }
-    .row {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 8px;
-      flex-wrap: wrap;
-    }
-    label {
-      font-size: 14px;
-      color: #374151;
-      display: block;
-      margin-bottom: 4px;
-    }
-    input {
-      padding: 6px 8px;
-      border-radius: 4px;
-      border: 1px solid #d1d5db;
-      min-width: 0;
-    }
-    button {
-      padding: 6px 10px;
-      border-radius: 4px;
-      border: none;
-      background: #2563eb;
-      color: white;
-      cursor: pointer;
-      font-size: 14px;
-    }
-    button.danger {
-      background: #dc2626;
-    }
-    button.small {
-      padding: 4px 8px;
-      font-size: 12px;
-    }
-    button:disabled {
-      opacity: 0.6;
-      cursor: default;
-    }
-    .account {
-      border-top: 1px solid #e5e7eb;
-      padding-top: 12px;
-      margin-top: 12px;
-    }
-    .account-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 8px;
-    }
-    .feeds {
-      margin-top: 8px;
-      font-size: 13px;
-    }
-    .feed-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 4px 0;
-      border-bottom: 1px solid #f3f4f6;
-    }
-    .pill {
-      display: inline-block;
-      padding: 2px 6px;
-      border-radius: 9999px;
-      background: #e5e7eb;
-      font-size: 12px;
-      color: #111827;
-    }
-    .status {
-      margin-bottom: 12px;
-      font-size: 13px;
-      min-height: 18px;
-    }
-    .status.ok { color: #15803d; }
-    .status.err { color: #b91c1c; }
-    a {
-      color: #2563eb;
-      text-decoration: none;
-      font-size: 12px;
-    }
-    a:hover {
-      text-decoration: underline;
-    }
-  </style>
-</head>
-<body>
-  <h1>YouTube WebSub → Telegram Admin</h1>
+  const html = [
+    '<!DOCTYPE html>',
+    '<html lang="vi">',
+    '<head>',
+    '  <meta charset="UTF-8" />',
+    '  <title>YouTube WebSub Admin</title>',
+    '  <style>',
+    '    body {',
+    '      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;',
+    '      background: #f4f4f5;',
+    '      margin: 0;',
+    '      padding: 20px;',
+    '    }',
+    '    h1 {',
+    '      margin-top: 0;',
+    '    }',
+    '    .card {',
+    '      background: #ffffff;',
+    '      border-radius: 8px;',
+    '      padding: 16px;',
+    '      margin-bottom: 16px;',
+    '      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);',
+    '    }',
+    '    .row {',
+    '      display: flex;',
+    '      gap: 8px;',
+    '      margin-bottom: 8px;',
+    '      flex-wrap: wrap;',
+    '    }',
+    '    label {',
+    '      font-size: 14px;',
+    '      color: #374151;',
+    '      display: block;',
+    '      margin-bottom: 4px;',
+    '    }',
+    '    input {',
+    '      padding: 6px 8px;',
+    '      border-radius: 4px;',
+    '      border: 1px solid #d1d5db;',
+    '      min-width: 0;',
+    '    }',
+    '    button {',
+    '      padding: 6px 10px;',
+    '      border-radius: 4px;',
+    '      border: none;',
+    '      background: #2563eb;',
+    '      color: white;',
+    '      cursor: pointer;',
+    '      font-size: 14px;',
+    '    }',
+    '    button.danger {',
+    '      background: #dc2626;',
+    '    }',
+    '    button.small {',
+    '      padding: 4px 8px;',
+    '      font-size: 12px;',
+    '    }',
+    '    button:disabled {',
+    '      opacity: 0.6;',
+    '      cursor: default;',
+    '    }',
+    '    .account {',
+    '      border-top: 1px solid #e5e7eb;',
+    '      padding-top: 12px;',
+    '      margin-top: 12px;',
+    '    }',
+    '    .account-header {',
+    '      display: flex;',
+    '      justify-content: space-between;',
+    '      align-items: center;',
+    '      gap: 8px;',
+    '    }',
+    '    .feeds {',
+    '      margin-top: 8px;',
+    '      font-size: 13px;',
+    '    }',
+    '    .feed-item {',
+    '      display: flex;',
+    '      align-items: center;',
+    '      justify-content: space-between;',
+    '      gap: 8px;',
+    '      padding: 4px 0;',
+    '      border-bottom: 1px solid #f3f4f6;',
+    '    }',
+    '    .pill {',
+    '      display: inline-block;',
+    '      padding: 2px 6px;',
+    '      border-radius: 9999px;',
+    '      background: #e5e7eb;',
+    '      font-size: 12px;',
+    '      color: #111827;',
+    '    }',
+    '    .status {',
+    '      margin-bottom: 12px;',
+    '      font-size: 13px;',
+    '      min-height: 18px;',
+    '    }',
+    '    .status.ok { color: #15803d; }',
+    '    .status.err { color: #b91c1c; }',
+    '    a {',
+    '      color: #2563eb;',
+    '      text-decoration: none;',
+    '      font-size: 12px;',
+    '    }',
+    '    a:hover {',
+    '      text-decoration: underline;',
+    '    }',
+    '  </style>',
+    '</head>',
+    '<body>',
+    '  <h1>YouTube WebSub → Telegram Admin</h1>',
+    '',
+    '  <div id="status" class="status"></div>',
+    '',
+    '  <div class="card">',
+    '    <h2>Thêm tài khoản (nhóm kênh)</h2>',
+    '    <div class="row">',
+    '      <div>',
+    '        <label>Tên account</label>',
+    '        <input id="newName" placeholder="VD: Quyet, Huong" />',
+    '      </div>',
+    '      <div style="align-self:flex-end;">',
+    '        <button id="btnAddAccount">Thêm tài khoản</button>',
+    '      </div>',
+    '    </div>',
+    '  </div>',
+    '',
+    '  <div class="card">',
+    '    <h2>Danh sách tài khoản & channel</h2>',
+    '    <div id="accounts"></div>',
+    '  </div>',
+    '',
+    '<script>',
+    'const statusEl = document.getElementById("status");',
+    'const accountsEl = document.getElementById("accounts");',
+    'const btnAddAccount = document.getElementById("btnAddAccount");',
+    'const inpName = document.getElementById("newName");',
+    '',
+    'function setStatus(msg, ok = true) {',
+    '  statusEl.textContent = msg || "";',
+    '  statusEl.className = "status " + (msg ? (ok ? "ok" : "err") : "");',
+    '}',
+    '',
+    'async function api(path, options) {',
+    '  const res = await fetch(path, {',
+    '    headers: { "Content-Type": "application/json" },',
+    '    ...options',
+    '  });',
+    '  if (!res.ok) {',
+    '    let msg = res.status + " " + res.statusText;',
+    '    try {',
+    '      const j = await res.json();',
+    '      if (j && j.error) msg = j.error;',
+    '    } catch {}',
+    '    throw new Error(msg);',
+    '  }',
+    '  try {',
+    '    return await res.json();',
+    '  } catch {',
+    '    return null;',
+    '  }',
+    '}',
+    '',
+    'async function loadAccounts() {',
+    '  accountsEl.innerHTML = "Đang tải...";',
+    '  try {',
+    '    const data = await api("/accounts", { method: "GET" });',
+    '    if (!data.length) {',
+    '      accountsEl.innerHTML = "<i>Chưa có tài khoản nào.</i>";',
+    '      return;',
+    '    }',
+    '    accountsEl.innerHTML = "";',
+    '    data.forEach(acc => {',
+    '      const accDiv = document.createElement("div");',
+    '      accDiv.className = "account";',
+    '      let feedsHtml = "";',
+    '      if (acc.feeds && acc.feeds.length) {',
+    '        acc.feeds.forEach(ch => {',
+    '          feedsHtml += ',
+    '            "<div class=\\"feed-item\\">" +',
+    '              "<div>" +',
+    '                "<span class=\\"pill\\">" + ch + "</span> " +',
+    '                "<a href=\\"https://www.youtube.com/channel/" + ch + "\\" target=\\"_blank\\">mở kênh</a>" +',
+    '              "</div>" +',
+    '              "<button class=\\"small danger\\" data-del-feed=\\"" + ch + "\\" data-account=\\"" + acc.id + "\\">Xóa</button>" +',
+    '            "</div>";',
+    '        });',
+    '      } else {',
+    '        feedsHtml = "<i>Chưa có channel nào.</i>";',
+    '      }',
+    '',
+    '      accDiv.innerHTML =',
+    '        "<div class=\\"account-header\\">" +',
+    '          "<div>" +',
+    '            "<div><b>" + acc.name + "</b> <span class=\\"pill\\">" + acc.id + "</span></div>" +',
+    '          "</div>" +',
+    '          "<div>" +',
+    '            "<button class=\\"small danger\\" data-del-account=\\"" + acc.id + "\\">Xóa tài khoản</button>" +',
+    '          "</div>" +',
+    '        "</div>" +',
+    '        "<div class=\\"feeds\\">" +',
+    '          "<div style=\\"margin-bottom:4px;\\"><b>Các channel:</b></div>" +',
+    '          "<div class=\\"feed-list\\">" + feedsHtml + "</div>" +',
+    '          "<div class=\\"row\\" style=\\"margin-top:8px;\\">" +',
+    '            "<div style=\\"flex:1;\\">" +',
+    '              "<label>Thêm channel bằng URL</label>" +',
+    '              "<input placeholder=\\"https://www.youtube.com/@LegoUnlocked\\" data-url-input=\\"" + acc.id + "\\" style=\\"width:100%;\\" />" +',
+    '            "</div>" +',
+    '            "<div style=\\"align-self:flex-end;\\">" +',
+    '              "<button class=\\"small\\" data-add-feed=\\"" + acc.id + "\\">Thêm</button>" +',
+    '            "</div>" +',
+    '          "</div>" +',
+    '        "</div>";',
+    '',
+    '      accountsEl.appendChild(accDiv);',
+    '    });',
+    '  } catch (e) {',
+    '    accountsEl.innerHTML = "<span style=\\"color:#b91c1c;\\">Lỗi tải accounts: " + e.message + "</span>";',
+    '  }',
+    '}',
+    '',
+    'btnAddAccount.addEventListener("click", async () => {',
+    '  const name = inpName.value.trim();',
+    '  if (!name) {',
+    '    setStatus("Nhập tên account", false);',
+    '    return;',
+    '  }',
+    '  btnAddAccount.disabled = true;',
+    '  try {',
+    '    await api("/account", {',
+    '      method: "POST",',
+    '      body: JSON.stringify({ name })',
+    '    });',
+    '    setStatus("Đã thêm tài khoản " + name, true);',
+    '    inpName.value = "";',
+    '    await loadAccounts();',
+    '  } catch (e) {',
+    '    setStatus("Lỗi thêm tài khoản: " + e.message, false);',
+    '  } finally {',
+    '    btnAddAccount.disabled = false;',
+    '  }',
+    '});',
+    '',
+    'accountsEl.addEventListener("click", async (e) => {',
+    '  const btn = e.target;',
+    '  // Xóa tài khoản',
+    '  if (btn.dataset.delAccount) {',
+    '    const id = btn.dataset.delAccount;',
+    '    if (!confirm("Xóa tài khoản này?")) return;',
+    '    btn.disabled = true;',
+    '    try {',
+    '      await api("/account/" + id, {',
+    '        method: "DELETE",',
+    '        body: JSON.stringify({})',
+    '      });',
+    '      setStatus("Đã xóa tài khoản", true);',
+    '      await loadAccounts();',
+    '    } catch (err) {',
+    '      setStatus("Lỗi xóa tài khoản: " + err.message, false);',
+    '    } finally {',
+    '      btn.disabled = false;',
+    '    }',
+    '  }',
+    '  // Xóa feed',
+    '  if (btn.dataset.delFeed) {',
+    '    const ch = btn.dataset.delFeed;',
+    '    const accId = btn.dataset.account;',
+    '    if (!confirm("Xóa channel " + ch + " khỏi tài khoản này?")) return;',
+    '    btn.disabled = true;',
+    '    try {',
+    '      await api("/account/" + accId + "/feed", {',
+    '        method: "DELETE",',
+    '        body: JSON.stringify({ channelId: ch })',
+    '      });',
+    '      setStatus("Đã xóa channel " + ch, true);',
+    '      await loadAccounts();',
+    '    } catch (err) {',
+    '      setStatus("Lỗi xóa channel: " + err.message, false);',
+    '    } finally {',
+    '      btn.disabled = false;',
+    '    }',
+    '  }',
+    '  // Thêm feed từ URL',
+    '  if (btn.dataset.addFeed) {',
+    '    const accId = btn.dataset.addFeed;',
+    '    const input = accountsEl.querySelector("input[data-url-input=\\"" + accId + "\\"]");',
+    '    if (!input) return;',
+    '    const url = input.value.trim();',
+    '    if (!url) {',
+    '      setStatus("Nhập URL kênh YouTube trước", false);',
+    '      return;',
+    '    }',
+    '    btn.disabled = true;',
+    '    try {',
+    '      const resolved = await api("/resolve-channel", {',
+    '        method: "POST",',
+    '        body: JSON.stringify({ url })',
+    '      });',
+    '      const ch = resolved.channelId;',
+    '      await api("/account/" + accId + "/feed", {',
+    '        method: "POST",',
+    '        body: JSON.stringify({ channelId: ch })',
+    '      });',
+    '      setStatus("Đã thêm channel " + ch, true);',
+    '      input.value = "";',
+    '      await loadAccounts();',
+    '    } catch (err) {',
+    '      setStatus("Lỗi thêm channel: " + err.message, false);',
+    '    } finally {',
+    '      btn.disabled = false;',
+    '    }',
+    '  }',
+    '});',
+    '',
+    'loadAccounts();',
+    '</script>',
+    '</body>',
+    '</html>'
+  ].join('\n');
 
-  <div id="status" class="status"></div>
-
-  <div class="card">
-    <h2>Thêm tài khoản (nhóm kênh)</h2>
-    <div class="row">
-      <div>
-        <label>Tên account</label>
-        <input id="newName" placeholder="VD: Quyet, Huong" />
-      </div>
-      <div style="align-self:flex-end;">
-        <button id="btnAddAccount">Thêm tài khoản</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Danh sách tài khoản & channel</h2>
-    <div id="accounts"></div>
-  </div>
-
-<script>
-const statusEl = document.getElementById('status');
-const accountsEl = document.getElementById('accounts');
-const btnAddAccount = document.getElementById('btnAddAccount');
-const inpName = document.getElementById('newName');
-
-function setStatus(msg, ok = true) {
-  statusEl.textContent = msg || '';
-  statusEl.className = 'status ' + (msg ? (ok ? 'ok' : 'err') : '');
-}
-
-async function api(path, options) {
-  const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options
-  });
-  if (!res.ok) {
-    let msg = res.status + ' ' + res.statusText;
-    try {
-      const j = await res.json();
-      if (j && j.error) msg = j.error;
-    } catch {}
-    throw new Error(msg);
-  }
-  try {
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-async function loadAccounts() {
-  accountsEl.innerHTML = 'Đang tải...';
-  try {
-    const data = await api('/accounts', { method: 'GET' });
-    if (!data.length) {
-      accountsEl.innerHTML = '<i>Chưa có tài khoản nào.</i>';
-      return;
-    }
-    accountsEl.innerHTML = '';
-    data.forEach(acc => {
-      const accDiv = document.createElement('div');
-      accDiv.className = 'account';
-      accDiv.innerHTML = `
-        <div class="account-header">
-          <div>
-            <div><b>${acc.name}</b> <span class="pill">${acc.id}</span></div>
-          </div>
-          <div>
-            <button class="small danger" data-del-account="${acc.id}">Xóa tài khoản</button>
-          </div>
-        </div>
-        <div class="feeds">
-          <div style="margin-bottom:4px;"><b>Các channel:</b></div>
-          <div class="feed-list">
-            ${
-              acc.feeds.length
-                ? acc.feeds.map(ch => `
-                  <div class="feed-item">
-                    <div>
-                      <span class="pill">${ch}</span>
-                      <a href="https://www.youtube.com/channel/${ch}" target="_blank">mở kênh</a>
-                    </div>
-                    <button class="small danger" data-del-feed="${ch}" data-account="${acc.id}">Xóa</button>
-                  </div>
-                `).join('')
-                : '<i>Chưa có channel nào.</i>'
-            }
-          </div>
-          <div class="row" style="margin-top:8px;">
-            <div style="flex:1;">
-              <label>Thêm channel bằng URL</label>
-              <input placeholder="https://www.youtube.com/@LegoUnlocked" data-url-input="${acc.id}" style="width:100%;" />
-            </div>
-            <div style="align-self:flex-end;">
-              <button class="small" data-add-feed="${acc.id}">Thêm</button>
-            </div>
-          </div>
-        </div>
-      `;
-      accountsEl.appendChild(accDiv);
-    });
-  } catch (e) {
-    accountsEl.innerHTML = '<span style="color:#b91c1c;">Lỗi tải accounts: ' + e.message + '</span>';
-  }
-}
-
-btnAddAccount.addEventListener('click', async () => {
-  const name = inpName.value.trim();
-  if (!name) {
-    setStatus('Nhập tên account', false);
-    return;
-  }
-  btnAddAccount.disabled = true;
-  try {
-    await api('/account', {
-      method: 'POST',
-      body: JSON.stringify({ name })
-    });
-    setStatus('Đã thêm tài khoản ' + name, true);
-    inpName.value = '';
-    await loadAccounts();
-  } catch (e) {
-    setStatus('Lỗi thêm tài khoản: ' + e.message, false);
-  } finally {
-    btnAddAccount.disabled = false;
-  }
-});
-
-accountsEl.addEventListener('click', async (e) => {
-  const btn = e.target;
-  // Xóa tài khoản
-  if (btn.dataset.delAccount) {
-    const id = btn.dataset.delAccount;
-    if (!confirm('Xóa tài khoản này?')) return;
-    btn.disabled = true;
-    try {
-      await api('/account/' + id, {
-        method: 'DELETE',
-        body: JSON.stringify({})
-      });
-      setStatus('Đã xóa tài khoản', true);
-      await loadAccounts();
-    } catch (err) {
-      setStatus('Lỗi xóa tài khoản: ' + err.message, false);
-    } finally {
-      btn.disabled = false;
-    }
-  }
-  // Xóa feed
-  if (btn.dataset.delFeed) {
-    const ch = btn.dataset.delFeed;
-    const accId = btn.dataset.account;
-    if (!confirm('Xóa channel ' + ch + ' khỏi tài khoản này?')) return;
-    btn.disabled = true;
-    try {
-      await api('/account/' + accId + '/feed', {
-        method: 'DELETE',
-        body: JSON.stringify({ channelId: ch })
-      });
-      setStatus('Đã xóa channel ' + ch, true);
-      await loadAccounts();
-    } catch (err) {
-      setStatus('Lỗi xóa channel: ' + err.message, false);
-    } finally {
-      btn.disabled = false;
-    }
-  }
-  // Thêm feed từ URL
-  if (btn.dataset.addFeed) {
-    const accId = btn.dataset.addFeed;
-    const input = accountsEl.querySelector('input[data-url-input="' + accId + '"]');
-    if (!input) return;
-    const url = input.value.trim();
-    if (!url) {
-      setStatus('Nhập URL kênh YouTube trước', false);
-      return;
-    }
-    btn.disabled = true;
-    try {
-      const resolved = await api('/resolve-channel', {
-        method: 'POST',
-        body: JSON.stringify({ url })
-      });
-      const ch = resolved.channelId;
-      await api('/account/' + accId + '/feed', {
-        method: 'POST',
-        body: JSON.stringify({ channelId: ch })
-      });
-      setStatus('Đã thêm channel ' + ch, true);
-      input.value = '';
-      await loadAccounts();
-    } catch (err) {
-      setStatus('Lỗi thêm channel: ' + err.message, false);
-    } finally {
-      btn.disabled = false;
-    }
-  }
-});
-
-loadAccounts();
-</script>
-</body>
-</html>`;
   res.type('html').send(html);
 });
+
 
 // ---------- START ----------
 
