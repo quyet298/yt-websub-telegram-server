@@ -1,8 +1,3 @@
-// server.js - YouTube WebSub -> Telegram with Neon (PostgreSQL) + Admin UI
-// Mô hình:
-// - "Account" = nhóm kênh (Quyet, Huong, ...), không gắn trực tiếp Telegram
-// - Tất cả video mới được gửi đến danh sách chat_id trong TELEGRAM_CHAT_IDS
-
 const express = require('express');
 const cors = require('cors');
 const xml2js = require('xml2js');
@@ -10,7 +5,6 @@ const fetch = require('node-fetch');
 const { Pool } = require('pg');
 const axios = require('axios');
 
-// Env bắt buộc
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const HOST_URL = process.env.HOST_URL || '';
 const DATABASE_URL = process.env.DATABASE_URL || '';
@@ -31,17 +25,14 @@ if (!HOST_URL) {
   process.exit(1);
 }
 if (!DATABASE_URL) {
-  console.error('Missing DATABASE_URL (Neon connection string).');
+  console.error('Missing DATABASE_URL');
   process.exit(1);
 }
 if (TELEGRAM_CHAT_IDS.length === 0) {
-  console.error(
-    'Missing TELEGRAM_CHAT_IDS (comma-separated chat ids, e.g. "1007258280,5670772623").'
-  );
+  console.error('Missing TELEGRAM_CHAT_IDS');
   process.exit(1);
 }
 
-// pg pool (Neon dùng SSL)
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: { rejectUnauthorized: false }
@@ -62,12 +53,9 @@ app.use(
   })
 );
 
-// health check
 app.get('/', (req, res) => {
   res.send('OK (YouTube WebSub -> Telegram server)');
 });
-
-// ---------- TELEGRAM ----------
 
 async function sendTelegram(chat_id, text) {
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
@@ -88,12 +76,8 @@ async function sendTelegram(chat_id, text) {
   }
 }
 
-// gửi message tới tất cả chat_id cấu hình trong TELEGRAM_CHAT_IDS
 async function sendToAllTargets(text) {
-  if (!TELEGRAM_CHAT_IDS.length) {
-    console.warn('No TELEGRAM_CHAT_IDS configured');
-    return;
-  }
+  if (!TELEGRAM_CHAT_IDS.length) return;
   for (const chatId of TELEGRAM_CHAT_IDS) {
     try {
       await sendTelegram(chatId, text);
@@ -111,8 +95,6 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
-
-// ---------- WEB SUB (SUBSCRIBE) ----------
 
 async function subscribeChannel(channelId) {
   const topic = `https://www.youtube.com/xml/feeds/videos.xml?channel_id=${channelId}`;
@@ -157,28 +139,20 @@ async function subscribeChannel(channelId) {
   }
 }
 
-// ---------- API: ACCOUNTS & FEEDS ----------
-// "Account" = nhóm kênh logic (Quyet, Huong, ...)
-// Bảng accounts vẫn có cột telegram_chat_id nhưng không dùng nữa (đặt 'unused')
-
-// Tạo account mới (chỉ cần name)
+// accounts: nhóm kênh logic (Quyet, Huong, ...). telegram_chat_id trong DB không dùng, lưu "unused" cho đủ cột.
 app.post('/account', async (req, res) => {
   try {
     const { name, telegram_chat_id } = req.body;
     if (!name) {
       return res.status(400).json({ error: 'name required' });
     }
-
-    // cột telegram_chat_id vẫn NOT NULL nên gán 'unused' nếu không truyền
     const chatIdStored = telegram_chat_id || 'unused';
-
     const result = await dbQuery(
       `insert into accounts (name, telegram_chat_id)
        values ($1, $2)
        returning id, name, telegram_chat_id`,
       [name, chatIdStored]
     );
-
     const row = result.rows[0];
     res.json({
       id: row.id,
@@ -192,7 +166,6 @@ app.post('/account', async (req, res) => {
   }
 });
 
-// Danh sách tất cả account (cho UI)
 app.get('/accounts', async (req, res) => {
   try {
     const accRes = await dbQuery(
@@ -203,21 +176,17 @@ app.get('/accounts', async (req, res) => {
       'select account_id, channel_id from feeds order by id',
       []
     );
-
     const feedMap = {};
     for (const row of feedsRes.rows) {
       if (!feedMap[row.account_id]) feedMap[row.account_id] = [];
       feedMap[row.account_id].push(row.channel_id);
     }
-
     const result = accRes.rows.map((a) => ({
       id: a.id,
       name: a.name,
-      // telegram_chat_id không còn ý nghĩa, không cần dùng trên UI
       telegram_chat_id: a.telegram_chat_id,
       feeds: feedMap[a.id] || []
     }));
-
     res.json(result);
   } catch (err) {
     console.error('GET /accounts error', err);
@@ -225,7 +194,6 @@ app.get('/accounts', async (req, res) => {
   }
 });
 
-// Lấy 1 account
 app.get('/account/:id', async (req, res) => {
   const id = req.params.id;
   try {
@@ -252,7 +220,6 @@ app.get('/account/:id', async (req, res) => {
   }
 });
 
-// Xóa account
 app.delete('/account/:id', async (req, res) => {
   const id = req.params.id;
   try {
@@ -267,7 +234,6 @@ app.delete('/account/:id', async (req, res) => {
   }
 });
 
-// Thêm feed cho account + auto-subscribe WebSub
 app.post('/account/:id/feed', async (req, res) => {
   const accountId = req.params.id;
   const { channelId } = req.body;
@@ -313,7 +279,6 @@ app.post('/account/:id/feed', async (req, res) => {
   }
 });
 
-// Xóa feed (channel) khỏi account
 app.delete('/account/:id/feed', async (req, res) => {
   const accountId = req.params.id;
   const { channelId } = req.body;
@@ -337,7 +302,6 @@ app.delete('/account/:id/feed', async (req, res) => {
   }
 });
 
-// Danh sách subscriptions
 app.get('/subscriptions', async (req, res) => {
   try {
     const subs = await dbQuery(
@@ -350,8 +314,6 @@ app.get('/subscriptions', async (req, res) => {
     res.status(500).json({ error: 'internal error' });
   }
 });
-
-// ---------- API: RESOLVE CHANNEL (URL -> channelId) ----------
 
 app.post('/resolve-channel', async (req, res) => {
   const { url } = req.body;
@@ -382,14 +344,6 @@ app.post('/resolve-channel', async (req, res) => {
   }
 });
 
-// ---------- WEBHOOK (YouTube) + Lọc video < 20h + chống trùng ----------
-// Cần bảng videos (đã tạo):
-// CREATE TABLE IF NOT EXISTS videos (
-//   video_id TEXT PRIMARY KEY,
-//   channel_id TEXT NOT NULL,
-//   published_at TIMESTAMPTZ NOT NULL
-// );
-
 app.get('/webhook', (req, res) => {
   const challenge = req.query['hub.challenge'];
   if (challenge) {
@@ -399,6 +353,17 @@ app.get('/webhook', (req, res) => {
 });
 
 app.post('/webhook', async (req, res) => {
+  // cleanup videos older than 7 days
+  try {
+    await dbQuery(
+      `delete from videos where published_at < now() - interval '7 days'`,
+      []
+    );
+    console.log('Cleaned old videos (>7 days)');
+  } catch (err) {
+    console.error('Cleanup error:', err);
+  }
+
   const xml = req.body;
   if (!xml || typeof xml !== 'string') {
     res.sendStatus(400);
@@ -434,7 +399,6 @@ app.post('/webhook', async (req, res) => {
         continue;
       }
 
-      // 1) Lấy thời gian đăng từ <published> hoặc <updated>
       const publishedRaw = entry.published || entry.updated;
       let publishedAt = null;
       if (publishedRaw) {
@@ -447,7 +411,6 @@ app.post('/webhook', async (req, res) => {
         publishedAt = new Date();
       }
 
-      // 2) Bỏ qua nếu video cũ hơn 20 giờ
       const now = new Date();
       const ageHours =
         (now.getTime() - publishedAt.getTime()) / (1000 * 60 * 60);
@@ -461,7 +424,6 @@ app.post('/webhook', async (req, res) => {
         continue;
       }
 
-      // 3) Chống gửi trùng: nếu videoId đã có trong bảng videos thì bỏ qua
       const existing = await dbQuery(
         'select 1 from videos where video_id = $1',
         [videoId]
@@ -471,14 +433,12 @@ app.post('/webhook', async (req, res) => {
         continue;
       }
 
-      // 4) Lưu video vào bảng videos
       await dbQuery(
         `insert into videos (video_id, channel_id, published_at)
          values ($1, $2, $3)`,
         [videoId, entryChannelId, publishedAt.toISOString()]
       );
 
-      // 5) Tìm các account quan tâm kênh này
       const accounts = await dbQuery(
         `select a.id, a.name
          from accounts a
@@ -497,7 +457,6 @@ app.post('/webhook', async (req, res) => {
         continue;
       }
 
-      // 6) Gửi message tới tất cả chat_id global, mỗi account một message
       const url = `https://youtu.be/${videoId}`;
       for (const acc of accounts.rows) {
         const text = `[${escapeHtml(
@@ -518,9 +477,6 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// ---------- ADMIN UI (/admin) ----------
-// Quản lý account (tên) + channel theo account, thêm channel bằng URL
-
 app.get('/admin', (req, res) => {
   const html = [
     '<!DOCTYPE html>',
@@ -535,15 +491,13 @@ app.get('/admin', (req, res) => {
     '      margin: 0;',
     '      padding: 20px;',
     '    }',
-    '    h1 {',
-    '      margin-top: 0;',
-    '    }',
+    '    h1 { margin-top: 0; }',
     '    .card {',
     '      background: #ffffff;',
     '      border-radius: 8px;',
     '      padding: 16px;',
     '      margin-bottom: 16px;',
-    '      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);',
+    '      box-shadow: 0 1px 3px rgba(15,23,42,0.1);',
     '    }',
     '    .row {',
     '      display: flex;',
@@ -572,17 +526,9 @@ app.get('/admin', (req, res) => {
     '      cursor: pointer;',
     '      font-size: 14px;',
     '    }',
-    '    button.danger {',
-    '      background: #dc2626;',
-    '    }',
-    '    button.small {',
-    '      padding: 4px 8px;',
-    '      font-size: 12px;',
-    '    }',
-    '    button:disabled {',
-    '      opacity: 0.6;',
-    '      cursor: default;',
-    '    }',
+    '    button.danger { background: #dc2626; }',
+    '    button.small { padding: 4px 8px; font-size: 12px; }',
+    '    button:disabled { opacity: 0.6; cursor: default; }',
     '    .account {',
     '      border-top: 1px solid #e5e7eb;',
     '      padding-top: 12px;',
@@ -594,10 +540,7 @@ app.get('/admin', (req, res) => {
     '      align-items: center;',
     '      gap: 8px;',
     '    }',
-    '    .feeds {',
-    '      margin-top: 8px;',
-    '      font-size: 13px;',
-    '    }',
+    '    .feeds { margin-top: 8px; font-size: 13px; }',
     '    .feed-item {',
     '      display: flex;',
     '      align-items: center;',
@@ -626,16 +569,12 @@ app.get('/admin', (req, res) => {
     '      text-decoration: none;',
     '      font-size: 12px;',
     '    }',
-    '    a:hover {',
-    '      text-decoration: underline;',
-    '    }',
+    '    a:hover { text-decoration: underline; }',
     '  </style>',
     '</head>',
     '<body>',
     '  <h1>YouTube WebSub → Telegram Admin</h1>',
-    '',
     '  <div id="status" class="status"></div>',
-    '',
     '  <div class="card">',
     '    <h2>Thêm tài khoản (nhóm kênh)</h2>',
     '    <div class="row">',
@@ -648,23 +587,19 @@ app.get('/admin', (req, res) => {
     '      </div>',
     '    </div>',
     '  </div>',
-    '',
     '  <div class="card">',
     '    <h2>Danh sách tài khoản & channel</h2>',
     '    <div id="accounts"></div>',
     '  </div>',
-    '',
     '<script>',
     'const statusEl = document.getElementById("status");',
     'const accountsEl = document.getElementById("accounts");',
     'const btnAddAccount = document.getElementById("btnAddAccount");',
     'const inpName = document.getElementById("newName");',
-    '',
     'function setStatus(msg, ok = true) {',
     '  statusEl.textContent = msg || "";',
     '  statusEl.className = "status " + (msg ? (ok ? "ok" : "err") : "");',
     '}',
-    '',
     'async function api(path, options) {',
     '  const res = await fetch(path, {',
     '    headers: { "Content-Type": "application/json" },',
@@ -684,7 +619,6 @@ app.get('/admin', (req, res) => {
     '    return null;',
     '  }',
     '}',
-    '',
     'async function loadAccounts() {',
     '  accountsEl.innerHTML = "Đang tải...";',
     '  try {',
@@ -700,7 +634,7 @@ app.get('/admin', (req, res) => {
     '      let feedsHtml = "";',
     '      if (acc.feeds && acc.feeds.length) {',
     '        acc.feeds.forEach(ch => {',
-    '          feedsHtml += ',
+    '          feedsHtml +=',
     '            "<div class=\\"feed-item\\">" +',
     '              "<div>" +',
     '                "<span class=\\"pill\\">" + ch + "</span> " +',
@@ -712,7 +646,6 @@ app.get('/admin', (req, res) => {
     '      } else {',
     '        feedsHtml = "<i>Chưa có channel nào.</i>";',
     '      }',
-    '',
     '      accDiv.innerHTML =',
     '        "<div class=\\"account-header\\">" +',
     '          "<div>" +',
@@ -735,14 +668,12 @@ app.get('/admin', (req, res) => {
     '            "</div>" +',
     '          "</div>" +',
     '        "</div>";',
-    '',
     '      accountsEl.appendChild(accDiv);',
     '    });',
     '  } catch (e) {',
     '    accountsEl.innerHTML = "<span style=\\"color:#b91c1c;\\">Lỗi tải accounts: " + e.message + "</span>";',
     '  }',
     '}',
-    '',
     'btnAddAccount.addEventListener("click", async () => {',
     '  const name = inpName.value.trim();',
     '  if (!name) {',
@@ -764,10 +695,8 @@ app.get('/admin', (req, res) => {
     '    btnAddAccount.disabled = false;',
     '  }',
     '});',
-    '',
     'accountsEl.addEventListener("click", async (e) => {',
     '  const btn = e.target;',
-    '  // Xóa tài khoản',
     '  if (btn.dataset.delAccount) {',
     '    const id = btn.dataset.delAccount;',
     '    if (!confirm("Xóa tài khoản này?")) return;',
@@ -785,7 +714,6 @@ app.get('/admin', (req, res) => {
     '      btn.disabled = false;',
     '    }',
     '  }',
-    '  // Xóa feed',
     '  if (btn.dataset.delFeed) {',
     '    const ch = btn.dataset.delFeed;',
     '    const accId = btn.dataset.account;',
@@ -804,7 +732,6 @@ app.get('/admin', (req, res) => {
     '      btn.disabled = false;',
     '    }',
     '  }',
-    '  // Thêm feed từ URL',
     '  if (btn.dataset.addFeed) {',
     '    const accId = btn.dataset.addFeed;',
     '    const input = accountsEl.querySelector("input[data-url-input=\\"" + accId + "\\"]");',
@@ -835,7 +762,6 @@ app.get('/admin', (req, res) => {
     '    }',
     '  }',
     '});',
-    '',
     'loadAccounts();',
     '</script>',
     '</body>',
@@ -844,9 +770,6 @@ app.get('/admin', (req, res) => {
 
   res.type('html').send(html);
 });
-
-
-// ---------- START ----------
 
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
