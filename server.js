@@ -1,11 +1,13 @@
 // server.js - bản test đơn giản
 
 const express = require('express');
+const cors = require('cors');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // để đọc JSON body
+app.use(cors());
 app.use(express.json());
 
 // test: GET / => trả chữ OK
