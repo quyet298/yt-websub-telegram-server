@@ -35,4 +35,4 @@ Dự án này là một Node.js server dùng để:
 ### Tạo account
 POST `/account`
 ```json
-{ "name": "Quyet", "telegram_chat_id": "123456789" }
+{ "name": "Quyết iu", "telegram_chat_id": "quyetiu_bot" }
