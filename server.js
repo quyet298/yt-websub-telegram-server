@@ -12,7 +12,7 @@ const TELEGRAM_CHAT_IDS = (process.env.TELEGRAM_CHAT_IDS || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
-
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || ''; 
 const HUB_URL = 'https://pubsubhubbub.appspot.com/subscribe';
 const PORT = process.env.PORT || 3000;
 
@@ -322,21 +322,112 @@ app.post('/resolve-channel', async (req, res) => {
   }
 
   try {
-    const r = await fetch(url);
-    if (!r.ok) {
+    // 1) Nếu URL đã là dạng /channel/UC... thì cắt thẳng
+    const directMatch = url.match(/youtube\.com\/channel\/(UC[0-9A-Za-z_-]+)/);
+    if (directMatch && directMatch[1]) {
+      return res.json({ channelId: directMatch[1] });
+    }
+
+    let channelId = null;
+
+    // 2) Nếu có API key, dùng YouTube Data API
+    if (YOUTUBE_API_KEY) {
+      // 2a) URL dạng @handle
+      const handleMatch = url.match(/youtube\.com\/@([^\/]+)/);
+      if (handleMatch && handleMatch[1]) {
+        const handle = handleMatch[1]; // không có @
+        const apiUrl =
+          'https://www.googleapis.com/youtube/v3/search'
+          + '?part=snippet'
+          + '&type=channel'
+          + '&maxResults=5'
+          + '&q=' + encodeURIComponent(handle)
+          + '&key=' + encodeURIComponent(YOUTUBE_API_KEY);
+
+        const rApi = await fetch(apiUrl);
+        if (!rApi.ok) {
+          console.error('YouTube API search error status:', rApi.status);
+        } else {
+          const j = await rApi.json();
+          if (j.items && j.items.length > 0) {
+            // ưu tiên item có customUrl trùng handle (nếu có)
+            let best = j.items[0];
+            for (const item of j.items) {
+              const cu = item.snippet && item.snippet.customUrl;
+              if (cu && cu.toLowerCase() === handle.toLowerCase()) {
+                best = item;
+                break;
+              }
+            }
+            if (best.id && best.id.channelId) {
+              channelId = best.id.channelId;
+            }
+          }
+        }
+      }
+
+      // 2b) URL dạng /user/USERNAME
+      if (!channelId) {
+        const userMatch = url.match(/youtube\.com\/user\/([^\/\?]+)/);
+        if (userMatch && userMatch[1]) {
+          const username = userMatch[1];
+          const apiUrl =
+            'https://www.googleapis.com/youtube/v3/channels'
+            + '?part=id'
+            + '&forUsername=' + encodeURIComponent(username)
+            + '&key=' + encodeURIComponent(YOUTUBE_API_KEY);
+
+          const rApi = await fetch(apiUrl);
+          if (rApi.ok) {
+            const j = await rApi.json();
+            if (j.items && j.items.length > 0 && j.items[0].id) {
+              channelId = j.items[0].id;
+            }
+          } else {
+            console.error('YouTube API channels(forUsername) error status:', rApi.status);
+          }
+        }
+      }
+    }
+
+    // 3) Nếu vẫn chưa có channelId, fallback HTML (cách cũ, phòng trường hợp API fail)
+    if (!channelId) {
+      const r = await fetch(url);
+      if (!r.ok) {
+        return res
+          .status(400)
+          .json({ error: 'cannot fetch url', status: r.status });
+      }
+      const html = await r.text();
+
+      let m = html.match(
+        /<link rel="canonical" href="https:\/\/www\.youtube\.com\/channel\/(UC[^"]+)"/
+      );
+      if (m && m[1]) {
+        channelId = m[1];
+      }
+
+      if (!channelId) {
+        m = html.match(/"externalChannelId"\s*:\s*"([^"]+)"/);
+        if (m && m[1]) {
+          channelId = m[1];
+        }
+      }
+
+      if (!channelId) {
+        m = html.match(/"channelId"\s*:\s*"([^"]+)"/);
+        if (m && m[1]) {
+          channelId = m[1];
+        }
+      }
+    }
+
+    if (!channelId || !channelId.startsWith('UC')) {
       return res
         .status(400)
-        .json({ error: 'cannot fetch url', status: r.status });
+        .json({ error: 'channelId not found or invalid' });
     }
-    const html = await r.text();
-    const m = html.match(/"channelId"\s*:\s*"([^"]+)"/);
-    if (!m || !m[1]) {
-      return res.status(400).json({ error: 'channelId not found in page' });
-    }
-    const channelId = m[1];
-    if (!channelId.startsWith('UC')) {
-      return res.status(400).json({ error: 'invalid channelId format' });
-    }
+
     res.json({ channelId });
   } catch (err) {
     console.error('resolve-channel error', err);
