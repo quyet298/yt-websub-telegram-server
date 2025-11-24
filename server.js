@@ -12,7 +12,10 @@ const TELEGRAM_CHAT_IDS = (process.env.TELEGRAM_CHAT_IDS || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
-const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || ''; 
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
+const DB_MAX_SIZE_MB = parseFloat(process.env.DB_MAX_SIZE_MB || '500');
+const DB_WARN_PCT = parseFloat(process.env.DB_WARN_PCT || '0.9');
+
 const HUB_URL = 'https://pubsubhubbub.appspot.com/subscribe';
 const PORT = process.env.PORT || 3000;
 
@@ -139,7 +142,7 @@ async function subscribeChannel(channelId) {
   }
 }
 
-// accounts: nhóm kênh logic (Quyet, Huong, ...). telegram_chat_id trong DB không dùng, lưu "unused" cho đủ cột.
+// accounts: nhóm kênh logic (Quyet, Huong, ...). telegram_chat_id trong DB không dùng, lưu "unused".
 app.post('/account', async (req, res) => {
   try {
     const { name, telegram_chat_id } = req.body;
@@ -315,6 +318,29 @@ app.get('/subscriptions', async (req, res) => {
   }
 });
 
+// thêm /ignore-channel: đánh dấu kênh không liên quan cho gợi ý
+app.post('/ignore-channel', async (req, res) => {
+  const { channelId, reason } = req.body;
+  if (!channelId) {
+    return res.status(400).json({ error: 'channelId required' });
+  }
+  try {
+    await dbQuery(
+      `insert into ignored_channels (channel_id, reason)
+       values ($1, $2)
+       on conflict (channel_id) do update
+         set reason = excluded.reason,
+             created_at = now()`,
+      [channelId, reason || null]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('POST /ignore-channel error', err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// resolve channel từ URL, ưu tiên YouTube Data API, fallback HTML
 app.post('/resolve-channel', async (req, res) => {
   const { url } = req.body;
   if (!url) {
@@ -322,7 +348,6 @@ app.post('/resolve-channel', async (req, res) => {
   }
 
   try {
-    // 1) Nếu URL đã là dạng /channel/UC... thì cắt thẳng
     const directMatch = url.match(/youtube\.com\/channel\/(UC[0-9A-Za-z_-]+)/);
     if (directMatch && directMatch[1]) {
       return res.json({ channelId: directMatch[1] });
@@ -330,19 +355,19 @@ app.post('/resolve-channel', async (req, res) => {
 
     let channelId = null;
 
-    // 2) Nếu có API key, dùng YouTube Data API
     if (YOUTUBE_API_KEY) {
-      // 2a) URL dạng @handle
       const handleMatch = url.match(/youtube\.com\/@([^\/]+)/);
       if (handleMatch && handleMatch[1]) {
-        const handle = handleMatch[1]; // không có @
+        const handle = handleMatch[1];
         const apiUrl =
-          'https://www.googleapis.com/youtube/v3/search'
-          + '?part=snippet'
-          + '&type=channel'
-          + '&maxResults=5'
-          + '&q=' + encodeURIComponent(handle)
-          + '&key=' + encodeURIComponent(YOUTUBE_API_KEY);
+          'https://www.googleapis.com/youtube/v3/search' +
+          '?part=snippet' +
+          '&type=channel' +
+          '&maxResults=5' +
+          '&q=' +
+          encodeURIComponent(handle) +
+          '&key=' +
+          encodeURIComponent(YOUTUBE_API_KEY);
 
         const rApi = await fetch(apiUrl);
         if (!rApi.ok) {
@@ -350,7 +375,6 @@ app.post('/resolve-channel', async (req, res) => {
         } else {
           const j = await rApi.json();
           if (j.items && j.items.length > 0) {
-            // ưu tiên item có customUrl trùng handle (nếu có)
             let best = j.items[0];
             for (const item of j.items) {
               const cu = item.snippet && item.snippet.customUrl;
@@ -366,16 +390,17 @@ app.post('/resolve-channel', async (req, res) => {
         }
       }
 
-      // 2b) URL dạng /user/USERNAME
       if (!channelId) {
         const userMatch = url.match(/youtube\.com\/user\/([^\/\?]+)/);
         if (userMatch && userMatch[1]) {
           const username = userMatch[1];
           const apiUrl =
-            'https://www.googleapis.com/youtube/v3/channels'
-            + '?part=id'
-            + '&forUsername=' + encodeURIComponent(username)
-            + '&key=' + encodeURIComponent(YOUTUBE_API_KEY);
+            'https://www.googleapis.com/youtube/v3/channels' +
+            '?part=id' +
+            '&forUsername=' +
+            encodeURIComponent(username) +
+            '&key=' +
+            encodeURIComponent(YOUTUBE_API_KEY);
 
           const rApi = await fetch(apiUrl);
           if (rApi.ok) {
@@ -384,13 +409,15 @@ app.post('/resolve-channel', async (req, res) => {
               channelId = j.items[0].id;
             }
           } else {
-            console.error('YouTube API channels(forUsername) error status:', rApi.status);
+            console.error(
+              'YouTube API channels(forUsername) error status:',
+              rApi.status
+            );
           }
         }
       }
     }
 
-    // 3) Nếu vẫn chưa có channelId, fallback HTML (cách cũ, phòng trường hợp API fail)
     if (!channelId) {
       const r = await fetch(url);
       if (!r.ok) {
@@ -435,6 +462,131 @@ app.post('/resolve-channel', async (req, res) => {
   }
 });
 
+// gợi ý kênh cho 1 account, dựa trên video mới và video liên quan
+app.post('/account/:id/suggest-channels', async (req, res) => {
+  const accountId = req.params.id;
+  if (!YOUTUBE_API_KEY) {
+    return res.status(400).json({ error: 'YOUTUBE_API_KEY required' });
+  }
+
+  try {
+    const accRes = await dbQuery(
+      'select id, name from accounts where id = $1',
+      [accountId]
+    );
+    if (accRes.rowCount === 0) {
+      return res.status(404).json({ error: 'account not found' });
+    }
+    const acc = accRes.rows[0];
+
+    const feedsRes = await dbQuery(
+      'select distinct channel_id from feeds where account_id = $1',
+      [accountId]
+    );
+    if (feedsRes.rowCount === 0) {
+      return res.json({
+        basedOn: { accountId: acc.id, accountName: acc.name, baseChannels: [] },
+        suggestions: []
+      });
+    }
+
+    const baseChannels = feedsRes.rows.map((r) => r.channel_id);
+
+    const ignRes = await dbQuery(
+      'select channel_id from ignored_channels',
+      []
+    );
+    const ignoredSet = new Set(ignRes.rows.map((r) => r.channel_id));
+    const currentSet = new Set(baseChannels);
+
+    const counts = {};
+    const names = {};
+
+    async function fetchJson(url) {
+      const r = await fetch(url);
+      if (!r.ok) {
+        console.error('YouTube API error', r.status, url);
+        return null;
+      }
+      return await r.json();
+    }
+
+    const maxBase = Math.min(baseChannels.length, 5); // giới hạn số kênh scan
+    for (let i = 0; i < maxBase; i++) {
+      const chId = baseChannels[i];
+
+      const urlLatest =
+        'https://www.googleapis.com/youtube/v3/search' +
+        '?part=id' +
+        '&channelId=' +
+        encodeURIComponent(chId) +
+        '&order=date' +
+        '&maxResults=3' +
+        '&type=video' +
+        '&key=' +
+        encodeURIComponent(YOUTUBE_API_KEY);
+
+      const latestJson = await fetchJson(urlLatest);
+      if (!latestJson || !latestJson.items) continue;
+
+      const videoIds = latestJson.items
+        .map((it) => it.id && it.id.videoId)
+        .filter(Boolean);
+
+      for (const vId of videoIds) {
+        const urlRel =
+          'https://www.googleapis.com/youtube/v3/search' +
+          '?part=snippet' +
+          '&relatedToVideoId=' +
+          encodeURIComponent(vId) +
+          '&type=video' +
+          '&maxResults=10' +
+          '&key=' +
+          encodeURIComponent(YOUTUBE_API_KEY);
+
+        const relJson = await fetchJson(urlRel);
+        if (!relJson || !relJson.items) continue;
+
+        for (const item of relJson.items) {
+          const s = item.snippet;
+          if (!s) continue;
+          const rc = s.channelId;
+          if (!rc) continue;
+          if (!rc.startsWith('UC')) continue;
+          if (currentSet.has(rc)) continue;
+          if (ignoredSet.has(rc)) continue;
+
+          counts[rc] = (counts[rc] || 0) + 1;
+          if (!names[rc]) {
+            names[rc] = s.channelTitle || null;
+          }
+        }
+      }
+    }
+
+    const suggestions = Object.entries(counts)
+      .map(([cid, score]) => ({
+        channelId: cid,
+        title: names[cid] || null,
+        score
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 20);
+
+    res.json({
+      basedOn: {
+        accountId: acc.id,
+        accountName: acc.name,
+        baseChannels
+      },
+      suggestions
+    });
+  } catch (err) {
+    console.error('POST /account/:id/suggest-channels error', err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
 app.get('/webhook', (req, res) => {
   const challenge = req.query['hub.challenge'];
   if (challenge) {
@@ -444,7 +596,7 @@ app.get('/webhook', (req, res) => {
 });
 
 app.post('/webhook', async (req, res) => {
-  // cleanup videos older than 7 days
+  // cleanup videos > 7 ngày
   try {
     await dbQuery(
       `delete from videos where published_at < now() - interval '7 days'`,
@@ -453,6 +605,32 @@ app.post('/webhook', async (req, res) => {
     console.log('Cleaned old videos (>7 days)');
   } catch (err) {
     console.error('Cleanup error:', err);
+  }
+
+  // cảnh báo DB gần đầy
+  try {
+    const sizeRes = await dbQuery(
+      'select pg_database_size(current_database()) as size_bytes',
+      []
+    );
+    const sizeBytes = Number(sizeRes.rows[0].size_bytes || 0);
+    const sizeMB = sizeBytes / (1024 * 1024);
+    if (
+      DB_MAX_SIZE_MB > 0 &&
+      DB_WARN_PCT > 0 &&
+      sizeMB > DB_MAX_SIZE_MB * DB_WARN_PCT
+    ) {
+      await sendToAllTargets(
+        `[System] Cảnh báo DB gần đầy: ` +
+          sizeMB.toFixed(1) +
+          ' MB / ' +
+          DB_MAX_SIZE_MB +
+          ' MB'
+      );
+      console.log('DB size warning sent');
+    }
+  } catch (err) {
+    console.error('DB size check error:', err);
   }
 
   const xml = req.body;
@@ -488,6 +666,41 @@ app.post('/webhook', async (req, res) => {
       if (!videoId || !entryChannelId) {
         console.warn('Missing videoId or channelId in entry');
         continue;
+      }
+
+      // bỏ member-only / không public nếu có YOUTUBE_API_KEY
+      if (YOUTUBE_API_KEY) {
+        try {
+          const apiUrl =
+            'https://www.googleapis.com/youtube/v3/videos' +
+            '?part=status' +
+            '&id=' +
+            encodeURIComponent(videoId) +
+            '&key=' +
+            encodeURIComponent(YOUTUBE_API_KEY);
+          const rApi = await fetch(apiUrl);
+          if (!rApi.ok) {
+            console.error('YouTube API videos.list error', rApi.status);
+            continue;
+          }
+          const j = await rApi.json();
+          if (!j.items || !j.items.length) {
+            console.log('No video info from API for', videoId);
+            continue;
+          }
+          const status = j.items[0].status;
+          if (!status || status.privacyStatus !== 'public') {
+            console.log(
+              'Skip non-public video',
+              videoId,
+              status && status.privacyStatus
+            );
+            continue;
+          }
+        } catch (e) {
+          console.error('Error checking video status from API', e);
+          continue;
+        }
       }
 
       const publishedRaw = entry.published || entry.updated;
@@ -758,6 +971,10 @@ app.get('/admin', (req, res) => {
     '              "<button class=\\"small\\" data-add-feed=\\"" + acc.id + "\\">Thêm</button>" +',
     '            "</div>" +',
     '          "</div>" +',
+    '        "</div>" +',
+    '        "<div class=\\"suggest\\" style=\\"margin-top:12px;\\">" +',
+    '          "<button class=\\"small\\" data-suggest-run=\\"" + acc.id + "\\">Gợi ý kênh</button>" +',
+    '          "<div class=\\"suggest-list\\" data-suggest-list=\\"" + acc.id + "\\" style=\\"margin-top:6px;font-size:13px;\\"></div>" +',
     '        "</div>";',
     '      accountsEl.appendChild(accDiv);',
     '    });',
@@ -848,6 +1065,83 @@ app.get('/admin', (req, res) => {
     '      await loadAccounts();',
     '    } catch (err) {',
     '      setStatus("Lỗi thêm channel: " + err.message, false);',
+    '    } finally {',
+    '      btn.disabled = false;',
+    '    }',
+    '  }',
+    '  if (btn.dataset.suggestRun) {',
+    '    const accId = btn.dataset.suggestRun;',
+    '    const listEl = accountsEl.querySelector(".suggest-list[data-suggest-list=\\"" + accId + "\\"]");',
+    '    if (!listEl) return;',
+    '    listEl.innerHTML = "Đang gợi ý...";',
+    '    btn.disabled = true;',
+    '    try {',
+    '      const data = await api("/account/" + accId + "/suggest-channels", {',
+    '        method: "POST",',
+    '        body: JSON.stringify({})',
+    '      });',
+    '      const sugg = (data && data.suggestions) || [];',
+    '      if (!sugg.length) {',
+    '        listEl.innerHTML = "<i>Chưa có gợi ý phù hợp.</i>";',
+    '      } else {',
+    '        let html = "";',
+    '        sugg.forEach(s => {',
+    '          const title = s.title || "(Không tên)";',
+    '          html +=',
+    '            "<div class=\\"feed-item\\">" +',
+    '              "<div>" +',
+    '                "<b>" + title + "</b> " +',
+    '                "<span class=\\"pill\\">" + s.channelId + "</span> " +',
+    '                "<span style=\\"font-size:11px;color:#6b7280;\\">score " + s.score + "</span> " +',
+    '                "<a href=\\"https://www.youtube.com/channel/" + s.channelId + "\\" target=\\"_blank\\">Xem kênh</a>" +',
+    '              "</div>" +',
+    '              "<div>" +',
+    '                "<button class=\\"small\\" data-ignore-channel=\\"" + s.channelId + "\\">Không liên quan</button> " +',
+    '                "<button class=\\"small\\" data-add-suggest=\\"" + s.channelId + "\\" data-account=\\"" + accId + "\\">Thêm</button>" +',
+    '              "</div>" +',
+    '            "</div>";',
+    '        });',
+    '        listEl.innerHTML = html;',
+    '      }',
+    '      setStatus("Đã gợi ý kênh cho account " + accId, true);',
+    '    } catch (err) {',
+    '      listEl.innerHTML = "<span style=\\"color:#b91c1c;\\">Lỗi gợi ý: " + err.message + "</span>";',
+    '      setStatus("Lỗi gợi ý kênh: " + err.message, false);',
+    '    } finally {',
+    '      btn.disabled = false;',
+    '    }',
+    '  }',
+    '  if (btn.dataset.ignoreChannel) {',
+    '    const ch = btn.dataset.ignoreChannel;',
+    '    if (!confirm("Đánh dấu kênh " + ch + " là không liên quan?")) return;',
+    '    btn.disabled = true;',
+    '    try {',
+    '      await api("/ignore-channel", {',
+    '        method: "POST",',
+    '        body: JSON.stringify({ channelId: ch, reason: "not_related" })',
+    '      });',
+    '      setStatus("Đã đánh dấu kênh " + ch + " là không liên quan", true);',
+    '      const parent = btn.closest(".feed-item");',
+    '      if (parent) parent.remove();',
+    '    } catch (err) {',
+    '      setStatus("Lỗi ignore channel: " + err.message, false);',
+    '    } finally {',
+    '      btn.disabled = false;',
+    '    }',
+    '  }',
+    '  if (btn.dataset.addSuggest) {',
+    '    const ch = btn.dataset.addSuggest;',
+    '    const accId = btn.dataset.account;',
+    '    btn.disabled = true;',
+    '    try {',
+    '      await api("/account/" + accId + "/feed", {',
+    '        method: "POST",',
+    '        body: JSON.stringify({ channelId: ch })',
+    '      });',
+    '      setStatus("Đã thêm channel " + ch + " vào account", true);',
+    '      await loadAccounts();',
+    '    } catch (err) {',
+    '      setStatus("Lỗi thêm channel từ gợi ý: " + err.message, false);',
     '    } finally {',
     '      btn.disabled = false;',
     '    }',
