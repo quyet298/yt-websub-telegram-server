@@ -57,7 +57,7 @@ app.use(
 );
 
 app.get('/', (req, res) => {
-  res.send('OK (YouTube WebSub -> Telegram server)');
+  res.send('OK (YouTube WebSub -> Telegram server v3)');
 });
 
 async function sendTelegram(chat_id, text) {
@@ -318,7 +318,7 @@ app.get('/subscriptions', async (req, res) => {
   }
 });
 
-// thêm /ignore-channel: đánh dấu kênh không liên quan cho gợi ý
+// đánh dấu kênh không liên quan (gợi ý sẽ bỏ qua)
 app.post('/ignore-channel', async (req, res) => {
   const { channelId, reason } = req.body;
   if (!channelId) {
@@ -462,7 +462,7 @@ app.post('/resolve-channel', async (req, res) => {
   }
 });
 
-// gợi ý kênh cho 1 account, dựa trên video mới và video liên quan
+// gợi ý kênh cho 1 account, dựa trên video mới + search theo title
 app.post('/account/:id/suggest-channels', async (req, res) => {
   const accountId = req.params.id;
   if (!YOUTUBE_API_KEY) {
@@ -511,7 +511,7 @@ app.post('/account/:id/suggest-channels', async (req, res) => {
       return await r.json();
     }
 
-    const maxBase = Math.min(baseChannels.length, 5); // giới hạn số kênh scan
+    const maxBase = Math.min(baseChannels.length, 5);
     for (let i = 0; i < maxBase; i++) {
       const chId = baseChannels[i];
 
@@ -534,17 +534,40 @@ app.post('/account/:id/suggest-channels', async (req, res) => {
         .filter(Boolean);
 
       for (const vId of videoIds) {
-        const urlRel =
-          'https://www.googleapis.com/youtube/v3/search' +
+        // lấy title video
+        const urlVideo =
+          'https://www.googleapis.com/youtube/v3/videos' +
           '?part=snippet' +
-          '&relatedToVideoId=' +
+          '&id=' +
           encodeURIComponent(vId) +
-          '&type=video' +
-          '&maxResults=10' +
           '&key=' +
           encodeURIComponent(YOUTUBE_API_KEY);
 
-        const relJson = await fetchJson(urlRel);
+        const videoJson = await fetchJson(urlVideo);
+        if (
+          !videoJson ||
+          !videoJson.items ||
+          !videoJson.items.length ||
+          !videoJson.items[0].snippet
+        ) {
+          continue;
+        }
+
+        const title = videoJson.items[0].snippet.title;
+        if (!title) continue;
+
+        // search theo title để tìm video tương tự
+        const urlSearch =
+          'https://www.googleapis.com/youtube/v3/search' +
+          '?part=snippet' +
+          '&type=video' +
+          '&maxResults=10' +
+          '&q=' +
+          encodeURIComponent(title) +
+          '&key=' +
+          encodeURIComponent(YOUTUBE_API_KEY);
+
+        const relJson = await fetchJson(urlSearch);
         if (!relJson || !relJson.items) continue;
 
         for (const item of relJson.items) {
@@ -557,9 +580,7 @@ app.post('/account/:id/suggest-channels', async (req, res) => {
           if (ignoredSet.has(rc)) continue;
 
           counts[rc] = (counts[rc] || 0) + 1;
-          if (!names[rc]) {
-            names[rc] = s.channelTitle || null;
-          }
+          if (!names[rc]) names[rc] = s.channelTitle || null;
         }
       }
     }
