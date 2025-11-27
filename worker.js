@@ -28,19 +28,33 @@ const { dbQuery } = require("./services/db");
 const cache = require("./services/cache");
 const logger = require("./logger");
 
-const videoQueue = new Queue("video-process", REDIS_URL);
+const videoQueue = new Queue("video-process", REDIS_URL, {
+  settings: {
+    stalledInterval: 60000,    // Check stalled jobs every 60s (default: 30s)
+    maxStalledCount: 2,
+    lockDuration: 60000
+  }
+});
 
-const FILTER_KEYWORDS = ["#short","shorts","trailer","clip","reaction"];
+const FILTER_KEYWORDS = [
+  "#short", "#shorts",
+  "short", "shorts",
+  "trailer", "clip", "reaction",
+  "live", "stream", "streaming",
+  "livestream", "live stream"
+];
 const MIN_SECONDS = 3*60 + 30;
 
-videoQueue.process(5, async (job) => {
+videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
   const payload = job.data;
   const { videoId, channelId, title, published } = payload;
-  const start = Date.now();
-  logger.info({ videoId, channelId }, "worker processing start");
+  const startTime = Date.now();
+
+  logger.info({ videoId, channelId, stage: 'start' }, "Worker processing");
 
   try {
     // DB dedupe
+    logger.debug({ videoId, stage: 'db-check' }, "Checking DB");
     const existing = await dbQuery("select 1 from videos where video_id = $1", [videoId]);
     if (existing.rowCount > 0) {
       logger.info({ videoId }, "already processed in DB");
@@ -57,11 +71,12 @@ videoQueue.process(5, async (job) => {
     // title filter
     const lowerTitle = (title || "").toLowerCase();
     if (FILTER_KEYWORDS.some(k => lowerTitle.includes(k))) {
-      logger.info({ videoId, title }, "filtered by title keyword");
+      logger.info({ videoId, title, stage: 'title-filter' }, "filtered by title keyword");
       return;
     }
 
-    const details = await getVideoDetails(videoId);
+    logger.debug({ videoId, stage: 'api-call' }, "Fetching YouTube details");
+    const details = await getVideoDetails(videoId, false);  // Don't fetch snippet (saves 1 quota)
     if (!details) {
       logger.warn({ videoId }, "no video details from YouTube");
       return;
@@ -79,11 +94,11 @@ videoQueue.process(5, async (job) => {
       return;
     }
 
-    // quality check: YouTube uses 'hd' in definition for HD; check thumbnails.maxres as extra hint
+    // quality check: Full HD only (strict - requires BOTH hd AND maxres)
     const definition = details.contentDetails && details.contentDetails.definition;
     const hasMaxres = details.snippet && details.snippet.thumbnails && details.snippet.thumbnails.maxres;
-    if (definition !== "hd" && !hasMaxres) {
-      logger.info({ videoId }, "filtered by quality");
+    if (definition !== "hd" || !hasMaxres) {
+      logger.info({ videoId, definition, hasMaxres, stage: 'quality-filter' }, "filtered by quality - Full HD required");
       return;
     }
 
@@ -97,9 +112,14 @@ videoQueue.process(5, async (job) => {
       return;
     }
 
+    // Use title from webhook for notification (more accurate + fresh)
+    const displayTitle = title || (details.snippet && details.snippet.title) || "Unknown";
+
+    logger.info({ videoId, stage: 'notification', accounts: accRes.rowCount }, "Sending notifications");
+
     const url = `https://youtu.be/${videoId}`;
     for (const acc of accRes.rows) {
-      const text = `[${escapeHtml(acc.name)}] New video: <b>${escapeHtml(details.snippet.title)}</b>\n${url}`;
+      const text = `[${escapeHtml(acc.name)}] New video: <b>${escapeHtml(displayTitle)}</b>\n${url}`;
       try {
         await sendToAllTargets(text);
       } catch (e) {
@@ -108,15 +128,40 @@ videoQueue.process(5, async (job) => {
       }
     }
 
-    const elapsed = Date.now() - start;
-    logger.info({ videoId, elapsed }, "worker processed successfully");
+    const elapsed = Date.now() - startTime;
+    logger.info({ videoId, elapsed, stage: 'complete' }, "Worker completed successfully");
   } catch (err) {
-    logger.error({ err: err.message, videoId }, "worker processing error");
+    logger.error({
+      videoId,
+      channelId,
+      err: err.message,
+      stack: err.stack,
+      stage: 'error'
+    }, "Worker processing error");
     throw err;
   } finally {
     cache.del(`proc:${videoId}`);
   }
 });
+
+// Daily cleanup queue - removes videos older than 7 days
+const cleanupQueue = new Queue("cleanup", REDIS_URL);
+
+cleanupQueue.process(async () => {
+  logger.info("Running daily cleanup");
+  const result = await dbQuery(
+    "DELETE FROM videos WHERE published_at < NOW() - INTERVAL '7 days'"
+  );
+  logger.info({ deletedRows: result.rowCount }, "Cleanup completed");
+});
+
+// Schedule daily at 3am
+cleanupQueue.add({}, {
+  repeat: { cron: '0 3 * * *' },
+  removeOnComplete: true
+});
+
+logger.info("Worker and cleanup queue initialized");
 
 function escapeHtml(s) { return s ? s.toString().replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") : ""; }
 
