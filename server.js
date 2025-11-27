@@ -210,9 +210,134 @@ app.get('/logout', (req, res) => {
   res.redirect('/login');
 });
 
+// Test Video endpoint
+app.post('/admin/test-video', adminAuth, async (req, res) => {
+  const { url } = req.body;
+
+  // Extract video ID from URL
+  let videoId = null;
+  const patterns = [
+    /youtube\.com\/watch\?v=([^&]+)/,
+    /youtu\.be\/([^?]+)/,
+    /youtube\.com\/embed\/([^?]+)/
+  ];
+
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match && match[1]) {
+      videoId = match[1];
+      break;
+    }
+  }
+
+  if (!videoId) {
+    return res.status(400).json({ error: 'Invalid YouTube URL' });
+  }
+
+  try {
+    const { getVideoDetails, parseDurationToSeconds } = require('./services/youtube');
+    const { sendToAllTargets } = require('./services/telegram');
+
+    // Fetch video details with snippet
+    const details = await getVideoDetails(videoId, true);
+    if (!details) {
+      return res.status(404).json({ error: 'Video not found or API error' });
+    }
+
+    // Check filters
+    const filterResults = {};
+
+    // Privacy
+    const privacyStatus = details.status?.privacyStatus || 'unknown';
+    filterResults.privacy = {
+      status: privacyStatus,
+      pass: privacyStatus === 'public'
+    };
+
+    // Duration
+    const duration = details.contentDetails?.duration || 'PT0S';
+    const seconds = parseDurationToSeconds(duration);
+    const MIN_SECONDS = 3*60 + 30;
+    filterResults.duration = {
+      seconds,
+      formatted: formatDuration(seconds),
+      pass: seconds > MIN_SECONDS
+    };
+
+    // Quality
+    const definition = details.contentDetails?.definition;
+    const hasMaxres = !!details.snippet?.thumbnails?.maxres;
+    filterResults.quality = {
+      definition,
+      hasMaxres,
+      pass: definition === 'hd' && hasMaxres
+    };
+
+    // Keywords
+    const title = details.snippet?.title || '';
+    const FILTER_KEYWORDS = ["short", "shorts", "live", "stream", "streaming", "livestream", "trailer", "clip", "reaction"];
+    const matchedKeywords = FILTER_KEYWORDS.filter(k => title.toLowerCase().includes(k));
+    filterResults.keywords = {
+      title,
+      matched: matchedKeywords,
+      pass: matchedKeywords.length === 0
+    };
+
+    // Overall
+    const allPass = filterResults.privacy.pass &&
+                    filterResults.duration.pass &&
+                    filterResults.quality.pass &&
+                    filterResults.keywords.pass;
+
+    // Send to Telegram if requested (force send regardless of filters)
+    if (req.body.forceSend) {
+      const videoUrl = `https://youtu.be/${videoId}`;
+      const text = `[TEST] <b>${escapeHtml(title)}</b>\n${videoUrl}`;
+      await sendToAllTargets(text);
+
+      return res.json({
+        success: true,
+        sent: true,
+        filterResults,
+        allPass
+      });
+    }
+
+    // Just return filter results
+    return res.json({
+      success: true,
+      sent: false,
+      filterResults,
+      allPass,
+      videoInfo: {
+        title,
+        videoId,
+        url: `https://youtu.be/${videoId}`
+      }
+    });
+
+  } catch (err) {
+    logger.error({ err: err.message }, 'Test video error');
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+function formatDuration(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function escapeHtml(s) {
+  return s ? s.toString().replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") : "";
+}
+
 app.use("/account", adminAuth, accountsRoutes);
 app.use("/webhook", webhookRoutes);
-app.get("/admin", adminAuth, adminRoutes);
+app.use("/admin", adminAuth, adminRoutes);  // FIX: Use app.use() for router, not app.get()
 app.get("/metrics", adminAuth, async (req, res) => {
   try {
     const stats = await videoQueue.getJobCounts();

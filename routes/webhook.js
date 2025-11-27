@@ -10,6 +10,15 @@ const videoQueue = new Queue("video-process", REDIS_URL, {
     stalledInterval: 60000,    // Check stalled jobs every 60s (default: 30s)
     maxStalledCount: 2,
     lockDuration: 60000
+  },
+  redis: {
+    maxRetriesPerRequest: 50,      // Increase from default 20 to 50 for Upstash free tier
+    enableReadyCheck: true,
+    connectTimeout: 30000,          // 30 seconds
+    retryStrategy: (times) => {
+      if (times > 50) return null;  // Stop after 50 tries
+      return Math.min(times * 100, 3000); // Progressive delay up to 3s
+    }
   }
 });
 
