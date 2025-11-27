@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(rm:*)",
+      "Bash(if [ -d \"d:/Video/youtube-to-tele/old\" ])",
+      "Bash(then rm -rf \"d:/Video/youtube-to-tele/old\")",
+      "Bash(else echo \"old/ folder not found\")",
+      "Bash(fi)",
+      "Bash(npm install:*)",
+      "Bash(node -c:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

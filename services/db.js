@@ -4,7 +4,11 @@ const logger = require("../logger");
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: { rejectUnauthorized: false },
+  max: 2,                      // Reduce from default 10 to save DB compute
+  idleTimeoutMillis: 30000,    // Close idle connections after 30s
+  connectionTimeoutMillis: 10000,
+  allowExitOnIdle: true        // Allow pool to fully close when idle
 });
 
 async function dbQuery(text, params) {
