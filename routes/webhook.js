@@ -20,6 +20,15 @@ const videoQueue = new Queue("video-process", REDIS_URL, {
   }
 });
 
+// Handle Redis connection errors gracefully (e.g., ECONNRESET from Upstash free tier)
+videoQueue.on('error', (error) => {
+  logger.error({
+    err: error.message,
+    code: error.code,
+    syscall: error.syscall
+  }, 'Webhook queue error - connection will retry');
+});
+
 router.get("/", (req, res) => {
   const challenge = req.query["hub.challenge"];
   if (challenge) return res.status(200).send(challenge);

@@ -21,6 +21,15 @@ const videoQueue = new Queue("video-process", REDIS_URL, {
   }
 });
 
+// Handle Redis connection errors gracefully (e.g., ECONNRESET from Upstash free tier)
+videoQueue.on('error', (error) => {
+  logger.error({
+    err: error.message,
+    code: error.code,
+    syscall: error.syscall
+  }, 'Video queue error - connection will retry');
+});
+
 const FILTER_KEYWORDS = [
   "#short", "#shorts",
   "short", "shorts",
@@ -131,6 +140,15 @@ videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
 
 // Daily cleanup queue - removes videos older than 7 days
 const cleanupQueue = new Queue("cleanup", REDIS_URL);
+
+// Handle Redis connection errors for cleanup queue
+cleanupQueue.on('error', (error) => {
+  logger.error({
+    err: error.message,
+    code: error.code,
+    syscall: error.syscall
+  }, 'Cleanup queue error - connection will retry');
+});
 
 cleanupQueue.process(async () => {
   logger.info("Running daily cleanup");
