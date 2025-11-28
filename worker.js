@@ -35,8 +35,6 @@ const videoQueue = new Queue("video-process", REDIS_URL, {
     lockDuration: 60000
   },
   redis: {
-    maxRetriesPerRequest: 50,      // Increase from default 20 to 50 for Upstash free tier
-    enableReadyCheck: true,
     connectTimeout: 30000,          // 30 seconds
     retryStrategy: (times) => {
       if (times > 50) return null;  // Stop after 50 tries
