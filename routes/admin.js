@@ -438,7 +438,6 @@ router.get("/", (req, res) => {
     '    html += "<div style=\\"margin-left:12px;\\">";',
     '    html += "  <div>Privacy: " + filterResults.privacy.status + " " + (filterResults.privacy.pass ? "\u2705" : "\u274C") + "</div>";',
     '    html += "  <div>Duration: " + filterResults.duration.formatted + " " + (filterResults.duration.pass ? "\u2705" : "\u274C") + " (need >3m30s)</div>";',
-    '    html += "  <div>Quality: " + filterResults.quality.definition + " " + (filterResults.quality.hasMaxres ? "+ maxres" : "- maxres") + " " + (filterResults.quality.pass ? "\u2705" : "\u274C") + "</div>";',
     '    html += "  <div>Keywords: " + (filterResults.keywords.matched.length > 0 ? filterResults.keywords.matched.join(", ") : "none") + " " + (filterResults.keywords.pass ? "\u2705" : "\u274C") + "</div>";',
     '    html += "</div>";',
     '    html += "<div style=\\"margin-top:8px;\\"><b>Overall:</b> " + (allPass ? "\u2705 PASS - Would be sent" : "\u274C FAIL - Would be filtered") + "</div>";',
