@@ -2,22 +2,16 @@
 const router = express.Router();
 const xml2js = require("xml2js");
 const Queue = require("bull");
-const { REDIS_URL } = require("../config");
+const redisClient = require("../services/redis");
 const logger = require("../logger");
 
-const videoQueue = new Queue("video-process", REDIS_URL, {
+// Use shared Redis client with proper error handling
+const videoQueue = new Queue("video-process", {
+  createClient: () => redisClient.duplicate(),
   settings: {
     stalledInterval: 60000,    // Check stalled jobs every 60s (default: 30s)
     maxStalledCount: 2,
     lockDuration: 60000
-  },
-  redis: {
-    maxRetriesPerRequest: 50,       // Match retryStrategy limit (default: 20)
-    connectTimeout: 30000,          // 30 seconds
-    retryStrategy: (times) => {
-      if (times > 50) return null;  // Stop after 50 tries
-      return Math.min(times * 100, 3000); // Progressive delay up to 3s
-    }
   }
 });
 
