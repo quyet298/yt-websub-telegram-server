@@ -13,6 +13,7 @@ const videoQueue = new Queue("video-process", REDIS_URL, {
     lockDuration: 60000
   },
   redis: {
+    maxRetriesPerRequest: 50,       // Match retryStrategy limit (default: 20)
     connectTimeout: 30000,          // 30 seconds
     retryStrategy: (times) => {
       if (times > 50) return null;  // Stop after 50 tries
@@ -139,7 +140,11 @@ videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
 });
 
 // Daily cleanup queue - removes videos older than 7 days
-const cleanupQueue = new Queue("cleanup", REDIS_URL);
+const cleanupQueue = new Queue("cleanup", REDIS_URL, {
+  redis: {
+    maxRetriesPerRequest: 50  // Match videoQueue retry limit
+  }
+});
 
 // Handle Redis connection errors for cleanup queue
 cleanupQueue.on('error', (error) => {
