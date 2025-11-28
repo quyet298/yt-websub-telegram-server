@@ -293,14 +293,28 @@ app.post('/admin/test-video', adminAuth, async (req, res) => {
     if (req.body.forceSend) {
       const videoUrl = `https://youtu.be/${videoId}`;
       const text = `[TEST] <b>${escapeHtml(title)}</b>\n${videoUrl}`;
-      await sendToAllTargets(text);
 
-      return res.json({
-        success: true,
-        sent: true,
-        filterResults,
-        allPass
-      });
+      try {
+        await sendToAllTargets(text);
+        logger.info({ videoId, title }, 'Test video sent successfully');
+
+        return res.json({
+          success: true,
+          sent: true,
+          message: 'Sent to all Telegram chats',
+          filterResults,
+          allPass
+        });
+      } catch (err) {
+        logger.error({ err: err.message, videoId }, 'Test video send failed');
+        return res.status(500).json({
+          success: false,
+          sent: false,
+          error: err.message,
+          filterResults,
+          allPass
+        });
+      }
     }
 
     // Just return filter results
@@ -340,12 +354,26 @@ app.use("/webhook", webhookRoutes);
 app.use("/admin", adminAuth, adminRoutes);  // FIX: Use app.use() for router, not app.get()
 app.get("/metrics", adminAuth, async (req, res) => {
   try {
-    const stats = await videoQueue.getJobCounts();
+    // Set timeout to 25 seconds (Render has 30s timeout)
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Metrics timeout')), 25000)
+    );
 
-    const dbSize = await dbQuery('SELECT pg_database_size(current_database()) as size');
-    const videoCount = await dbQuery('SELECT COUNT(*) as count FROM videos');
-    const accountCount = await dbQuery('SELECT COUNT(*) as count FROM accounts');
-    const feedCount = await dbQuery('SELECT COUNT(*) as count FROM feeds');
+    const metricsPromise = Promise.all([
+      videoQueue.getJobCounts().catch(err => {
+        logger.warn({ err: err.message }, 'Queue stats failed');
+        return { waiting: 0, active: 0, completed: 0, failed: 0 };
+      }),
+      dbQuery('SELECT pg_database_size(current_database()) as size').catch(() => ({ rows: [{ size: 0 }] })),
+      dbQuery('SELECT COUNT(*) as count FROM videos').catch(() => ({ rows: [{ count: 0 }] })),
+      dbQuery('SELECT COUNT(*) as count FROM accounts').catch(() => ({ rows: [{ count: 0 }] })),
+      dbQuery('SELECT COUNT(*) as count FROM feeds').catch(() => ({ rows: [{ count: 0 }] }))
+    ]);
+
+    const [stats, dbSize, videoCount, accountCount, feedCount] = await Promise.race([
+      metricsPromise,
+      timeout
+    ]);
 
     const html = `
 <!DOCTYPE html>
@@ -496,7 +524,59 @@ app.get("/metrics", adminAuth, async (req, res) => {
     res.send(html);
   } catch (err) {
     logger.error({ err: err.message }, "Metrics error");
-    res.status(500).send('Error loading metrics: ' + err.message);
+    // Return user-friendly error page
+    return res.send(`
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Metrics Timeout</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f7fa;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .error-card {
+      background: white;
+      padding: 40px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      text-align: center;
+      max-width: 500px;
+    }
+    h1 { color: #333; margin-bottom: 16px; }
+    p { color: #666; margin-bottom: 24px; }
+    a {
+      display: inline-block;
+      padding: 12px 24px;
+      background: #667eea;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      margin: 0 8px;
+    }
+    a:hover { background: #5568d3; }
+  </style>
+</head>
+<body>
+  <div class="error-card">
+    <h1>⏱️ Metrics Timeout</h1>
+    <p>Database or Redis is waking up from sleep. This is normal for free tier services.</p>
+    <p>Please wait 10-15 seconds and try again.</p>
+    <div>
+      <a href="/metrics">Refresh</a>
+      <a href="/admin">Back to Admin</a>
+    </div>
+  </div>
+</body>
+</html>
+    `);
   }
 });
 app.use("/", helperRoutes);
@@ -515,43 +595,6 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });
-});
-
-// Metrics endpoint
-app.get('/metrics', adminAuth, async (req, res) => {
-  try {
-    const stats = await videoQueue.getJobCounts();
-
-    const dbSize = await dbQuery('SELECT pg_database_size(current_database()) as size');
-    const videoCount = await dbQuery('SELECT COUNT(*) as count FROM videos');
-    const accountCount = await dbQuery('SELECT COUNT(*) as count FROM accounts');
-    const feedCount = await dbQuery('SELECT COUNT(*) as count FROM feeds');
-
-    res.json({
-      queue: {
-        waiting: stats.waiting,
-        active: stats.active,
-        completed: stats.completed,
-        failed: stats.failed
-      },
-      database: {
-        sizeBytes: parseInt(dbSize.rows[0].size),
-        sizeMB: (parseInt(dbSize.rows[0].size) / (1024 * 1024)).toFixed(2),
-        videoCount: parseInt(videoCount.rows[0].count),
-        accountCount: parseInt(accountCount.rows[0].count),
-        feedCount: parseInt(feedCount.rows[0].count)
-      },
-      system: {
-        uptime: process.uptime(),
-        memoryUsage: process.memoryUsage(),
-        nodeVersion: process.version
-      },
-      timestamp: new Date().toISOString()
-    });
-  } catch (err) {
-    logger.error({ err: err.message }, "Metrics error");
-    res.status(500).json({ error: err.message });
-  }
 });
 
 // Optional admin endpoint

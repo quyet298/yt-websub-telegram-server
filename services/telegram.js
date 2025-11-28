@@ -22,8 +22,10 @@ async function sendToAllTargets(text, opts = {}) {
   const targets = TELEGRAM_CHAT_IDS && TELEGRAM_CHAT_IDS.length ? TELEGRAM_CHAT_IDS : [];
   if (!targets.length) {
     logger.warn("No TELEGRAM_CHAT_IDS configured");
-    return;
+    throw new Error("No Telegram chat IDs configured");
   }
+
+  const errors = [];
   for (const chatId of targets) {
     try {
       await sendTelegram(chatId, {
@@ -34,7 +36,18 @@ async function sendToAllTargets(text, opts = {}) {
       });
     } catch (e) {
       logger.error({ err: e.message, chatId }, "Failed to send to chat");
+      errors.push({ chatId, error: e.message });
     }
+  }
+
+  // If ALL sends failed, throw error
+  if (errors.length === targets.length) {
+    throw new Error(`Failed to send to all ${targets.length} chats: ${errors[0].error}`);
+  }
+
+  // If SOME sends failed, log warning but don't throw
+  if (errors.length > 0) {
+    logger.warn({ errors, successCount: targets.length - errors.length }, "Partial send failure");
   }
 }
 
