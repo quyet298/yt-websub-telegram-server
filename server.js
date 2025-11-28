@@ -264,15 +264,6 @@ app.post('/admin/test-video', adminAuth, async (req, res) => {
       pass: seconds > MIN_SECONDS
     };
 
-    // Quality
-    const definition = details.contentDetails?.definition;
-    const hasMaxres = !!details.snippet?.thumbnails?.maxres;
-    filterResults.quality = {
-      definition,
-      hasMaxres,
-      pass: definition === 'hd' && hasMaxres
-    };
-
     // Keywords
     const title = details.snippet?.title || '';
     const FILTER_KEYWORDS = ["short", "shorts", "live", "stream", "streaming", "livestream", "trailer", "clip", "reaction"];
@@ -286,7 +277,6 @@ app.post('/admin/test-video', adminAuth, async (req, res) => {
     // Overall
     const allPass = filterResults.privacy.pass &&
                     filterResults.duration.pass &&
-                    filterResults.quality.pass &&
                     filterResults.keywords.pass;
 
     // Send to Telegram if requested (force send regardless of filters)

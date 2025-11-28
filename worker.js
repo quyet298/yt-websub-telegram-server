@@ -83,14 +83,6 @@ videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
       return;
     }
 
-    // quality check: Full HD only (strict - requires BOTH hd AND maxres)
-    const definition = details.contentDetails && details.contentDetails.definition;
-    const hasMaxres = details.snippet && details.snippet.thumbnails && details.snippet.thumbnails.maxres;
-    if (definition !== "hd" || !hasMaxres) {
-      logger.info({ videoId, definition, hasMaxres, stage: 'quality-filter' }, "filtered by quality - Full HD required");
-      return;
-    }
-
     // insert into DB (idempotent via unique constraint)
     const pubAt = published || (details.snippet && details.snippet.publishedAt) || new Date().toISOString();
     await dbQuery("insert into videos (video_id, channel_id, published_at) values ($1,$2,$3) on conflict (video_id) do nothing", [videoId, channelId, pubAt]);
