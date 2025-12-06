@@ -153,6 +153,44 @@ cleanupQueue.add({}, {
   removeOnComplete: true
 });
 
+// ============================================
+// FAILED JOB CLEANUP (Prevent memory leak)
+// ============================================
+// Clean up failed jobs older than 7 days to prevent Redis memory accumulation
+const FAILED_JOB_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+async function cleanupFailedJobs() {
+  try {
+    logger.debug("Checking for old failed jobs");
+    const failed = await videoQueue.getFailed();
+    let removedCount = 0;
+
+    for (const job of failed) {
+      // Check if job has finishedOn timestamp and is old enough
+      if (job.finishedOn) {
+        const age = Date.now() - job.finishedOn;
+        if (age > FAILED_JOB_MAX_AGE_MS) {
+          await job.remove();
+          removedCount++;
+          logger.debug({ jobId: job.id, age: Math.floor(age / 1000 / 60 / 60) + 'h' }, "Removed old failed job");
+        }
+      }
+    }
+
+    if (removedCount > 0) {
+      logger.info({ removedCount, totalFailed: failed.length }, "Failed jobs cleanup completed");
+    }
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed job cleanup error");
+  }
+}
+
+// Run cleanup every hour
+setInterval(cleanupFailedJobs, 60 * 60 * 1000);
+
+// Run once on startup (after 30 seconds to let system stabilize)
+setTimeout(cleanupFailedJobs, 30000);
+
 logger.info("Worker and cleanup queue initialized");
 
 function escapeHtml(s) { return s ? s.toString().replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") : ""; }
