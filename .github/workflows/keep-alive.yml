@@ -6,15 +6,10 @@ on:
     - cron: '*/14 * * * *'
   workflow_dispatch:  # Allow manual trigger
 
-permissions:
-  contents: write  # Required for keepalive-workflow to commit
-
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
       - name: Ping Health Endpoint
         run: |
           echo "Pinging server to keep it awake..."
@@ -26,8 +21,3 @@ jobs:
           else
             echo "⚠️  Unexpected response code: $response"
           fi
-
-      - name: Keep Workflow Active
-        uses: gautamkrishnar/keepalive-workflow@master
-        with:
-          time_elapsed: 45  # Auto-commit every 45 days to prevent workflow disable
