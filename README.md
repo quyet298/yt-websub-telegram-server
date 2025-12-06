@@ -2,8 +2,6 @@
 
 Hệ thống tự động theo dõi kênh YouTube và gửi thông báo qua Telegram khi có video mới. Tối ưu cho 100% free tier deployment.
 
-🔗 **Live Demo:** https://yt-websub-telegram-server.onrender.com
-
 ## ✨ Tính năng
 
 - ✅ Tự động theo dõi kênh YouTube qua WebSub (PubSubHubbub)
