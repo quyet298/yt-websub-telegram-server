@@ -6,10 +6,15 @@ on:
     - cron: '*/14 * * * *'
   workflow_dispatch:  # Allow manual trigger
 
+permissions:
+  contents: write  # Required for keepalive-workflow to commit
+
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
       - name: Ping Health Endpoint
         run: |
           echo "Pinging server to keep it awake..."
