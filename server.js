@@ -342,6 +342,7 @@ function escapeHtml(s) {
 app.use("/account", adminAuth, accountsRoutes);
 app.use("/webhook", webhookRoutes);
 app.use("/admin", adminAuth, adminRoutes);  // FIX: Use app.use() for router, not app.get()
+
 app.get("/metrics", adminAuth, async (req, res) => {
   try {
     // Set timeout to 25 seconds (Render has 30s timeout)
