@@ -52,6 +52,7 @@ Thumbs.db
 # Editor folders
 .vscode/
 .idea/
+.claude/
 
 # Yarn v3
 .pnp.*

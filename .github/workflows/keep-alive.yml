@@ -1,0 +1,28 @@
+name: Keep Render Server Alive
+
+on:
+  schedule:
+    # Ping every 14 minutes to prevent Render free tier from sleeping (15-min timeout)
+    - cron: '*/14 * * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Health Endpoint
+        run: |
+          echo "Pinging server to keep it awake..."
+          response=$(curl -s -o /dev/null -w "%{http_code}" https://${{ secrets.RENDER_APP_URL }}/ping || echo "000")
+          echo "Response code: $response"
+
+          if [ "$response" = "200" ] || [ "$response" = "000" ]; then
+            echo "✅ Ping successful or timeout (acceptable)"
+          else
+            echo "⚠️  Unexpected response code: $response"
+          fi
+
+      - name: Keep Workflow Active
+        uses: gautamkrishnar/keepalive-workflow@master
+        with:
+          time_elapsed: 45  # Auto-commit every 45 days to prevent workflow disable

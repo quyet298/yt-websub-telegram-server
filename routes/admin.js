@@ -478,6 +478,7 @@ router.get("/", (req, res) => {
     '}',
     '',
     'loadAccounts();',
+    '',
     '</script>',
     '</body>',
     '</html>'
