@@ -34,8 +34,8 @@ app.use(
 function adminAuth(req, res, next) {
   if (!ADMIN_TOKEN) return next();
 
-  // Check cookie first, then header, then query param
-  const token = req.cookies.admin_token || req.headers["x-admin-token"] || req.query.admin_token;
+  // Check cookie first, then header (NO QUERY PARAMS for security)
+  const token = req.cookies.admin_token || req.headers["x-admin-token"];
 
   if (token === ADMIN_TOKEN) return next();
 
@@ -575,17 +575,50 @@ app.use("/", helperRoutes);
 // Lightweight ping endpoint (no logging overhead)
 app.get('/ping', (req, res) => res.send('pong'));
 
-// Health check with peak hour detection
+// Health check with dependency status
 const PEAK_HOURS = { start: 6, end: 23 }; // 6am-11pm
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
   const hour = new Date().getHours();
   const isPeak = hour >= PEAK_HOURS.start && hour <= PEAK_HOURS.end;
-  res.json({
+
+  // Quick health check (no dependencies) for keep-alive pings
+  if (req.query.quick === '1') {
+    return res.json({
+      status: 'ok',
+      isPeak,
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+  }
+
+  // Full health check with dependency status
+  const health = {
     status: 'ok',
     isPeak,
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
+    uptime: process.uptime(),
+    dependencies: {}
+  };
+
+  // Check Redis (queue backend)
+  try {
+    await videoQueue.client.ping();
+    health.dependencies.redis = { status: 'ok' };
+  } catch (err) {
+    health.dependencies.redis = { status: 'error', message: err.message };
+    health.status = 'degraded';
+  }
+
+  // Check Database
+  try {
+    await dbQuery('SELECT 1');
+    health.dependencies.database = { status: 'ok' };
+  } catch (err) {
+    health.dependencies.database = { status: 'error', message: err.message };
+    health.status = 'degraded';
+  }
+
+  res.json(health);
 });
 
 // Optional admin endpoint
@@ -602,6 +635,29 @@ app.post("/admin/renew-subscriptions", adminAuth, async (req, res) => {
     );
     return res.status(500).json({ error: "internal error" });
   }
+});
+
+// ============================================
+// GLOBAL ERROR HANDLERS (Prevent silent crashes)
+// ============================================
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error({
+    err: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+    promise: String(promise)
+  }, 'Unhandled Promise Rejection - Server will continue');
+  // Don't exit - let the server continue running
+});
+
+process.on('uncaughtException', (error, origin) => {
+  logger.error({
+    err: error.message,
+    stack: error.stack,
+    origin
+  }, 'Uncaught Exception - Server will continue');
+  // Don't exit - let the server continue running
+  // Note: In production, uncaught exceptions usually mean the app is in an undefined state
+  // But for this free tier server, it's better to stay alive than crash
 });
 
 app.listen(PORT, () => {

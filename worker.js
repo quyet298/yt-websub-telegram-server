@@ -42,20 +42,21 @@ videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
   logger.info({ videoId, channelId, stage: 'start' }, "Worker processing");
 
   try {
-    // DB dedupe
+    // IMPORTANT: Check cache FIRST (before DB) to prevent race condition
+    // If two workers get same video, cache prevents double processing
+    if (cache.get(`proc:${videoId}`)) {
+      logger.info({ videoId }, "already processing (cache)");
+      return;
+    }
+    cache.set(`proc:${videoId}`, true, 300);
+
+    // DB dedupe (after cache lock)
     logger.debug({ videoId, stage: 'db-check' }, "Checking DB");
     const existing = await dbQuery("select 1 from videos where video_id = $1", [videoId]);
     if (existing.rowCount > 0) {
       logger.info({ videoId }, "already processed in DB");
       return;
     }
-
-    // quick in-memory dedupe guard
-    if (cache.get(`proc:${videoId}`)) {
-      logger.info({ videoId }, "already processing (cache)");
-      return;
-    }
-    cache.set(`proc:${videoId}`, true, 300);
 
     // title filter
     const lowerTitle = (title || "").toLowerCase();
@@ -99,15 +100,17 @@ videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
     logger.info({ videoId, stage: 'notification', accounts: accRes.rowCount }, "Sending notifications");
 
     const url = `https://youtu.be/${videoId}`;
-    for (const acc of accRes.rows) {
+
+    // Parallelize Telegram sends for better performance
+    const sendPromises = accRes.rows.map(acc => {
       const text = `[${escapeHtml(acc.name)}] New video: <b>${escapeHtml(displayTitle)}</b>\n${url}`;
-      try {
-        await sendToAllTargets(text);
-      } catch (e) {
-        logger.error({ err: e.message, videoId }, "telegram send failed (worker)");
+      return sendToAllTargets(text).catch(e => {
+        logger.error({ err: e.message, videoId, account: acc.name }, "telegram send failed (worker)");
         throw e; // let Bull retry
-      }
-    }
+      });
+    });
+
+    await Promise.all(sendPromises);
 
     const elapsed = Date.now() - startTime;
     logger.info({ videoId, elapsed, stage: 'complete' }, "Worker completed successfully");
