@@ -621,21 +621,235 @@ app.get('/health', async (req, res) => {
   res.json(health);
 });
 
-// Optional admin endpoint
-app.post("/admin/renew-subscriptions", adminAuth, async (req, res) => {
+// Manual subscription renewal endpoint
+app.post("/admin/renew-subscription", adminAuth, async (req, res) => {
+  const { channelId } = req.body;
+
+  if (!channelId) {
+    return res.status(400).json({ error: "channelId required" });
+  }
+
   try {
-    return res.json({
-      ok: true,
-      note: "renew logic not implemented yet",
-    });
+    const { subscribeChannel } = require('./services/subscription');
+    const result = await subscribeChannel(channelId);
+
+    if (result.ok) {
+      logger.info({ channelId }, "Manual subscription renewal successful");
+      return res.json({
+        ok: true,
+        message: "Subscription renewed successfully",
+        expiresAt: new Date(Date.now() + 18*24*60*60*1000).toISOString()
+      });
+    } else {
+      logger.error({ channelId, error: result.error }, "Manual subscription renewal failed");
+      return res.status(500).json({
+        ok: false,
+        error: result.error || "Subscription failed"
+      });
+    }
   } catch (err) {
-    logger.error(
-      { err: err && err.message },
-      "renew-subscriptions error"
-    );
-    return res.status(500).json({ error: "internal error" });
+    logger.error({ err: err.message, channelId }, "Renewal error");
+    return res.status(500).json({ error: err.message });
   }
 });
+
+// Get all subscriptions with status
+app.get("/admin/subscriptions", adminAuth, async (req, res) => {
+  try {
+    const subs = await dbQuery(`
+      SELECT
+        s.channel_id,
+        s.topic,
+        s.status,
+        s.expires_at,
+        s.last_renewed_at,
+        s.renewal_attempts,
+        s.error_message,
+        s.subscribed_at,
+        COUNT(DISTINCT f.account_id) as account_count,
+        CASE
+          WHEN s.expires_at IS NULL THEN 'unknown'
+          WHEN s.expires_at < NOW() THEN 'expired'
+          WHEN s.expires_at < NOW() + INTERVAL '2 days' THEN 'expiring_soon'
+          ELSE 'ok'
+        END as health,
+        EXTRACT(EPOCH FROM (s.expires_at - NOW())) / 3600 as hours_until_expiry
+      FROM subscriptions s
+      LEFT JOIN feeds f ON f.channel_id = s.channel_id
+      GROUP BY s.channel_id, s.topic, s.status, s.expires_at, s.last_renewed_at,
+               s.renewal_attempts, s.error_message, s.subscribed_at
+      ORDER BY s.expires_at ASC NULLS LAST
+    `);
+
+    const stats = {
+      total: subs.rowCount,
+      active: subs.rows.filter(s => s.health === 'ok').length,
+      expiring_soon: subs.rows.filter(s => s.health === 'expiring_soon').length,
+      expired: subs.rows.filter(s => s.health === 'expired').length,
+      unknown: subs.rows.filter(s => s.health === 'unknown').length
+    };
+
+    return res.json({
+      stats,
+      subscriptions: subs.rows
+    });
+  } catch (err) {
+    logger.error({ err: err.message }, "Get subscriptions error");
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Debug specific video - check all filters
+app.post("/admin/debug-video", adminAuth, async (req, res) => {
+  const { videoId } = req.body;
+
+  if (!videoId) {
+    return res.status(400).json({ error: "videoId required" });
+  }
+
+  try {
+    const { getVideoDetails, parseDurationToSeconds } = require('./services/youtube');
+    const cache = require('./services/cache');
+
+    const checks = {};
+
+    // Check 1: Cache
+    checks.cache = {
+      processing: !!cache.get(`proc:${videoId}`),
+      details: !!cache.get(`video:${videoId}:false`)
+    };
+
+    // Check 2: Database
+    const dbCheck = await dbQuery("SELECT * FROM videos WHERE video_id = $1", [videoId]);
+    checks.database = {
+      exists: dbCheck.rowCount > 0,
+      row: dbCheck.rows[0] || null
+    };
+
+    // Check 3: YouTube API
+    const details = await getVideoDetails(videoId, true);
+    if (!details) {
+      checks.youtubeAPI = { success: false, error: "Video not found or API error" };
+      return res.json({ videoId, checks, overallPass: false, blockedBy: "youtube_api" });
+    }
+
+    checks.youtubeAPI = {
+      success: true,
+      privacyStatus: details.status?.privacyStatus || 'unknown',
+      duration: details.contentDetails?.duration || 'PT0S',
+      title: details.snippet?.title || 'Unknown'
+    };
+
+    // Check 4: Title Filter
+    const FILTER_KEYWORDS = ["#short", "#shorts", "short", "shorts", "trailer", "clip", "reaction", "live", "stream", "streaming", "livestream"];
+    const MIN_SECONDS = 3*60 + 30;
+    const lowerTitle = (checks.youtubeAPI.title || "").toLowerCase();
+    const matchedKeywords = FILTER_KEYWORDS.filter(k => lowerTitle.includes(k));
+
+    checks.titleFilter = {
+      title: checks.youtubeAPI.title,
+      matchedKeywords,
+      pass: matchedKeywords.length === 0
+    };
+
+    // Check 5: Duration
+    const seconds = parseDurationToSeconds(checks.youtubeAPI.duration);
+    checks.durationFilter = {
+      seconds,
+      minRequired: MIN_SECONDS,
+      formatted: formatDuration(seconds),
+      pass: seconds > MIN_SECONDS
+    };
+
+    // Check 6: Privacy
+    checks.privacyFilter = {
+      status: checks.youtubeAPI.privacyStatus,
+      pass: checks.youtubeAPI.privacyStatus === 'public'
+    };
+
+    // Check 7: Get channel from video
+    const channelId = details.snippet?.channelId;
+    checks.channelId = channelId;
+
+    // Check 8: Account subscriptions
+    if (channelId) {
+      const accRes = await dbQuery(`
+        SELECT a.id, a.name
+        FROM accounts a
+        JOIN feeds f ON f.account_id = a.id
+        WHERE f.channel_id = $1
+      `, [channelId]);
+
+      checks.subscriptions = {
+        channelId,
+        accounts: accRes.rows,
+        count: accRes.rowCount,
+        pass: accRes.rowCount > 0
+      };
+
+      // Check 9: YouTube WebSub subscription status
+      const subRes = await dbQuery("SELECT * FROM subscriptions WHERE channel_id = $1", [channelId]);
+      checks.websubStatus = {
+        exists: subRes.rowCount > 0,
+        status: subRes.rows[0]?.status || null,
+        expiresAt: subRes.rows[0]?.expires_at || null,
+        lastRenewed: subRes.rows[0]?.last_renewed_at || null
+      };
+    }
+
+    // Overall pass check
+    const overallPass =
+      !checks.cache.processing &&
+      !checks.database.exists &&
+      checks.titleFilter.pass &&
+      checks.durationFilter.pass &&
+      checks.privacyFilter.pass &&
+      checks.subscriptions?.pass;
+
+    // Determine what blocked it
+    let blockedBy = null;
+    if (checks.cache.processing) blockedBy = "cache_processing";
+    else if (checks.database.exists) blockedBy = "database_duplicate";
+    else if (!checks.titleFilter.pass) blockedBy = "title_filter";
+    else if (!checks.durationFilter.pass) blockedBy = "duration_filter";
+    else if (!checks.privacyFilter.pass) blockedBy = "privacy_filter";
+    else if (!checks.subscriptions?.pass) blockedBy = "no_subscriptions";
+    else if (checks.websubStatus && checks.websubStatus.status !== 'active') blockedBy = "websub_inactive";
+
+    return res.json({
+      videoId,
+      checks,
+      overallPass,
+      blockedBy,
+      recommendation: blockedBy ? getRecommendation(blockedBy, checks) : "Video should be processed normally"
+    });
+
+  } catch (err) {
+    logger.error({ err: err.message, videoId }, "Debug video error");
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+function getRecommendation(blockedBy, checks) {
+  switch (blockedBy) {
+    case "cache_processing":
+      return "Video is currently being processed. Wait 5 minutes or clear cache.";
+    case "database_duplicate":
+      return "Video already processed. Delete from videos table to reprocess.";
+    case "title_filter":
+      return `Title contains blocked keywords: ${checks.titleFilter.matchedKeywords.join(', ')}`;
+    case "duration_filter":
+      return `Video is ${checks.durationFilter.seconds}s but requires > ${checks.durationFilter.minRequired}s`;
+    case "privacy_filter":
+      return `Video privacy is '${checks.privacyFilter.status}' but requires 'public'`;
+    case "no_subscriptions":
+      return `No accounts subscribed to channel ${checks.channelId}. Add feed to account.`;
+    case "websub_inactive":
+      return `YouTube WebSub subscription is '${checks.websubStatus.status}'. Renew subscription.`;
+    default:
+      return "Unknown issue";
+  }
+}
 
 // ============================================
 // GLOBAL ERROR HANDLERS (Prevent silent crashes)

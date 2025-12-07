@@ -198,3 +198,59 @@ logger.info("Worker and cleanup queue initialized");
 
 function escapeHtml(s) { return s ? s.toString().replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") : ""; }
 
+// ============================================
+// AUTO SUBSCRIPTION RENEWAL (Every 6 hours)
+// ============================================
+const { subscribeChannel } = require("./services/subscription");
+
+async function renewExpiringSubscriptions() {
+  try {
+    logger.info("Checking for expiring subscriptions");
+
+    // Find subscriptions expiring within 48 hours
+    const expiring = await dbQuery(`
+      SELECT channel_id, expires_at, status
+      FROM subscriptions
+      WHERE expires_at < NOW() + INTERVAL '48 hours'
+      AND status IN ('active', 'expiring', 'expired')
+      ORDER BY expires_at ASC
+    `);
+
+    if (expiring.rowCount === 0) {
+      logger.info("No expiring subscriptions found");
+      return;
+    }
+
+    logger.info({ count: expiring.rowCount }, "Found expiring subscriptions, renewing...");
+
+    let renewed = 0;
+    let failed = 0;
+
+    for (const sub of expiring.rows) {
+      const result = await subscribeChannel(sub.channel_id);
+
+      if (result.ok) {
+        renewed++;
+        logger.info({ channelId: sub.channel_id }, "Subscription renewed");
+      } else {
+        failed++;
+        logger.error({ channelId: sub.channel_id, error: result.error }, "Renewal failed");
+      }
+
+      // Add delay between renewals to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    logger.info({ renewed, failed, total: expiring.rowCount }, "Subscription renewal completed");
+
+  } catch (err) {
+    logger.error({ err: err.message }, "Subscription renewal error");
+  }
+}
+
+// Run every 6 hours
+setInterval(renewExpiringSubscriptions, 6 * 60 * 60 * 1000);
+
+// Run once on startup (after 1 minute to let system stabilize)
+setTimeout(renewExpiringSubscriptions, 60000);
+

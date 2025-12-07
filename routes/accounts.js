@@ -21,13 +21,48 @@ router.post("/", async (req, res) => {
 router.get("/", async (req, res) => {
   try {
     const accRes = await dbQuery("select id, name, telegram_chat_id from accounts order by name", []);
-    const feedsRes = await dbQuery("select account_id, channel_id from feeds order by id", []);
+
+    // Get feeds WITH subscription status
+    const feedsRes = await dbQuery(`
+      SELECT
+        f.account_id,
+        f.channel_id,
+        s.status as sub_status,
+        s.expires_at,
+        s.last_renewed_at,
+        s.error_message,
+        CASE
+          WHEN s.expires_at IS NULL THEN 'unknown'
+          WHEN s.expires_at < NOW() THEN 'expired'
+          WHEN s.expires_at < NOW() + INTERVAL '2 days' THEN 'expiring_soon'
+          ELSE 'ok'
+        END as health,
+        EXTRACT(EPOCH FROM (s.expires_at - NOW())) / 3600 as hours_until_expiry
+      FROM feeds f
+      LEFT JOIN subscriptions s ON s.channel_id = f.channel_id
+      ORDER BY f.id
+    `, []);
+
     const feedMap = {};
     for (const row of feedsRes.rows) {
       if (!feedMap[row.account_id]) feedMap[row.account_id] = [];
-      feedMap[row.account_id].push(row.channel_id);
+      feedMap[row.account_id].push({
+        channel_id: row.channel_id,
+        sub_status: row.sub_status,
+        expires_at: row.expires_at,
+        last_renewed_at: row.last_renewed_at,
+        error_message: row.error_message,
+        health: row.health,
+        hours_until_expiry: row.hours_until_expiry
+      });
     }
-    const result = accRes.rows.map((a) => ({ id: a.id, name: a.name, telegram_chat_id: a.telegram_chat_id, feeds: feedMap[a.id] || [] }));
+
+    const result = accRes.rows.map((a) => ({
+      id: a.id,
+      name: a.name,
+      telegram_chat_id: a.telegram_chat_id,
+      feeds: feedMap[a.id] || []
+    }));
     res.json(result);
   } catch (err) {
     logger.error(err, "GET /accounts error");
