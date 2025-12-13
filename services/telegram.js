@@ -28,12 +28,19 @@ async function sendToAllTargets(text, opts = {}) {
   const errors = [];
   for (const chatId of targets) {
     try {
-      await sendTelegram(chatId, {
+      const payload = {
         chat_id: chatId,
         text,
         parse_mode: "HTML",
         disable_web_page_preview: !!opts.disable_web_page_preview
-      });
+      };
+
+      // Add inline keyboard if provided
+      if (opts.reply_markup) {
+        payload.reply_markup = opts.reply_markup;
+      }
+
+      await sendTelegram(chatId, payload);
     } catch (e) {
       logger.error({ err: e.message, chatId }, "Failed to send to chat");
       errors.push({ chatId, error: e.message });
