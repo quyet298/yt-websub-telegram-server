@@ -33,6 +33,7 @@ const FILTER_KEYWORDS = [
   "livestream", "live stream"
 ];
 const MIN_SECONDS = 3*60 + 30;
+const MAX_SECONDS = 25*60;  // 25 minutes = 1500 seconds
 
 videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
   const payload = job.data;
@@ -80,7 +81,11 @@ videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
 
     const seconds = parseDurationToSeconds(details.contentDetails && details.contentDetails.duration || "PT0S");
     if (seconds <= MIN_SECONDS) {
-      logger.info({ videoId, seconds }, "filtered by duration");
+      logger.info({ videoId, seconds }, "filtered by duration (too short)");
+      return;
+    }
+    if (seconds > MAX_SECONDS) {
+      logger.info({ videoId, seconds }, "filtered by duration (too long)");
       return;
     }
 
@@ -104,7 +109,18 @@ videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
     // Parallelize Telegram sends for better performance
     const sendPromises = accRes.rows.map(acc => {
       const text = `[${escapeHtml(acc.name)}] New video: <b>${escapeHtml(displayTitle)}</b>\n${url}`;
-      return sendToAllTargets(text).catch(e => {
+
+      // Create inline keyboard with protocol handler button
+      const reply_markup = {
+        inline_keyboard: [[
+          {
+            text: "📥 Open in Video Cleaner",
+            url: `videocleaner://${url}`
+          }
+        ]]
+      };
+
+      return sendToAllTargets(text, { reply_markup }).catch(e => {
         logger.error({ err: e.message, videoId, account: acc.name }, "telegram send failed (worker)");
         throw e; // let Bull retry
       });
