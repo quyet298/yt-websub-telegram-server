@@ -852,6 +852,144 @@ function getRecommendation(blockedBy, checks) {
 }
 
 // ============================================
+// DEBUG LOGS - Structured diagnostic export for Claude Code
+// ============================================
+app.get("/admin/debug-logs", adminAuth, async (req, res) => {
+  try {
+    const hours = parseInt(req.query.hours) || 24;
+    const sinceTimestamp = Date.now() - (hours * 60 * 60 * 1000);
+
+    // Get in-memory logs
+    const recentLogs = logger.getRecentLogs(sinceTimestamp);
+    const logStats = logger.getLogStats(sinceTimestamp);
+
+    // Query recent videos and events from database
+    const videosResult = await dbQuery(
+      `SELECT video_id, channel_id, published_at, created_at
+       FROM videos
+       WHERE created_at > to_timestamp($1 / 1000.0)
+       ORDER BY created_at DESC`,
+      [sinceTimestamp]
+    );
+
+    const feedsResult = await dbQuery(
+      `SELECT a.id, a.name, a.telegram_chat_id, COUNT(f.channel_id) as num_channels
+       FROM accounts a
+       LEFT JOIN feeds f ON f.account_id = a.id
+       GROUP BY a.id, a.name, a.telegram_chat_id`
+    );
+
+    const subsResult = await dbQuery(
+      `SELECT channel_id, status, expires_at, last_renewed_at, error_message
+       FROM subscriptions
+       ORDER BY expires_at`
+    );
+
+    // Analyze patterns
+    const summary = {
+      total_videos_processed: videosResult.rowCount,
+      time_range_hours: hours,
+      accounts: feedsResult.rows,
+      subscriptions: subsResult.rows.map(s => ({
+        ...s,
+        days_remaining: s.expires_at ?
+          Math.floor((new Date(s.expires_at) - new Date()) / (1000 * 60 * 60 * 24)) : null
+      }))
+    };
+
+    const diagnostics = {
+      issues: [],
+      recommendations: []
+    };
+
+    // Check for "no accounts subscribed" scenario
+    const accountsWithNoFeeds = feedsResult.rows.filter(a => a.num_channels === 0);
+    if (accountsWithNoFeeds.length > 0) {
+      diagnostics.issues.push({
+        type: "no_accounts_subscribed",
+        severity: "CRITICAL",
+        message: `${accountsWithNoFeeds.length} account(s) have NO channel subscriptions`,
+        affected_accounts: accountsWithNoFeeds,
+        fix: "Run: INSERT INTO feeds (account_id, channel_id) SELECT [account_id], channel_id FROM subscriptions WHERE status = 'active'"
+      });
+    }
+
+    // Check for orphaned subscriptions
+    const orphanedSubs = await dbQuery(
+      `SELECT s.channel_id, s.status
+       FROM subscriptions s
+       LEFT JOIN feeds f ON f.channel_id = s.channel_id
+       WHERE f.channel_id IS NULL`
+    );
+
+    if (orphanedSubs.rowCount > 0) {
+      diagnostics.issues.push({
+        type: "orphaned_subscriptions",
+        severity: "HIGH",
+        message: `${orphanedSubs.rowCount} subscriptions have NO feeds mapping`,
+        channels: orphanedSubs.rows.map(r => r.channel_id),
+        fix: "Channels are subscribed but not linked to any account. Add to feeds table."
+      });
+    }
+
+    // Check for accounts without telegram_chat_id
+    const accountsNoTelegram = feedsResult.rows.filter(a => !a.telegram_chat_id);
+    if (accountsNoTelegram.length > 0) {
+      diagnostics.issues.push({
+        type: "missing_telegram_chat_id",
+        severity: "HIGH",
+        message: `${accountsNoTelegram.length} account(s) missing telegram_chat_id`,
+        affected_accounts: accountsNoTelegram,
+        fix: "UPDATE accounts SET telegram_chat_id = '[YOUR_CHAT_ID]' WHERE id = ..."
+      });
+    }
+
+    // Check for expiring subscriptions
+    const expiringSubs = subsResult.rows.filter(s => {
+      if (!s.expires_at) return false;
+      const daysRemaining = Math.floor((new Date(s.expires_at) - new Date()) / (1000 * 60 * 60 * 24));
+      return daysRemaining >= 0 && daysRemaining < 2;
+    });
+
+    if (expiringSubs.length > 0) {
+      diagnostics.issues.push({
+        type: "expiring_subscriptions",
+        severity: "MEDIUM",
+        message: `${expiringSubs.length} subscription(s) expiring within 48 hours`,
+        channels: expiringSubs.map(s => s.channel_id),
+        fix: "Auto-renewal should handle this. If not, use /admin/renew-subscription endpoint."
+      });
+    }
+
+    // Add recommendations
+    if (diagnostics.issues.length === 0) {
+      diagnostics.recommendations.push("System health looks good! No critical issues detected.");
+    } else {
+      diagnostics.recommendations.push(
+        `Found ${diagnostics.issues.length} issue(s). Fix CRITICAL issues first.`
+      );
+    }
+
+    res.json({
+      generated_at: new Date().toISOString(),
+      query_params: { hours },
+      summary,
+      diagnostics,
+      recent_videos: videosResult.rows.slice(0, 50), // Limit to 50 most recent
+      log_analysis: {
+        total_logs: logStats.total,
+        counts_by_message: logStats.by_message,
+        sample_logs: recentLogs.slice(0, 100) // Last 100 log entries
+      }
+    });
+
+  } catch (err) {
+    logger.error({ err: err.message }, "debug-logs endpoint error");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================
 // GLOBAL ERROR HANDLERS (Prevent silent crashes)
 // ============================================
 process.on('unhandledRejection', (reason, promise) => {
