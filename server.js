@@ -852,6 +852,77 @@ function getRecommendation(blockedBy, checks) {
 }
 
 // ============================================
+// BROADCAST - Send message to all users who followed the bot
+// ============================================
+app.post("/admin/broadcast", adminAuth, async (req, res) => {
+  try {
+    const { message } = req.body;
+
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: "Message is required" });
+    }
+
+    // Get all accounts with telegram_chat_id
+    const accountsResult = await dbQuery(
+      `SELECT id, name, telegram_chat_id
+       FROM accounts
+       WHERE telegram_chat_id IS NOT NULL
+         AND telegram_chat_id != ''
+         AND telegram_chat_id != 'unused'`
+    );
+
+    if (accountsResult.rowCount === 0) {
+      return res.status(404).json({
+        error: "No accounts with telegram_chat_id found",
+        hint: "Update accounts table with valid telegram_chat_id first"
+      });
+    }
+
+    const { sendToAllTargets } = require('./services/telegram');
+    const results = {
+      total: accountsResult.rowCount,
+      sent: 0,
+      failed: 0,
+      errors: []
+    };
+
+    // Send to all accounts in parallel
+    const sendPromises = accountsResult.rows.map(async (account) => {
+      try {
+        await sendToAllTargets([account], message, null); // No reply_markup
+        results.sent++;
+        logger.info({ accountId: account.id, chatId: account.telegram_chat_id }, "Broadcast sent");
+      } catch (err) {
+        results.failed++;
+        results.errors.push({
+          accountId: account.id,
+          chatId: account.telegram_chat_id,
+          error: err.message
+        });
+        logger.error({ accountId: account.id, err: err.message }, "Broadcast failed");
+      }
+    });
+
+    await Promise.all(sendPromises);
+
+    return res.json({
+      success: true,
+      message: "Broadcast completed",
+      results,
+      accounts: accountsResult.rows.map(a => ({
+        id: a.id,
+        name: a.name,
+        telegram_chat_id: a.telegram_chat_id
+      }))
+    });
+
+  } catch (err) {
+    logger.error({ err: err.message }, "Broadcast endpoint error");
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================
 // DEBUG LOGS - Structured diagnostic export for Claude Code
 // ============================================
 app.get("/admin/debug-logs", adminAuth, async (req, res) => {
