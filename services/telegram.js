@@ -18,6 +18,40 @@ async function sendTelegram(chat_id, payload) {
   }
 }
 
+async function sendToAccount(account, text, opts = {}) {
+  if (!account || !account.telegram_chat_id) {
+    logger.warn({ accountId: account?.id }, "Account missing telegram_chat_id");
+    throw new Error("Account has no telegram_chat_id configured");
+  }
+
+  // Validate chat_id format (reject placeholders like 'unused', '', null)
+  const chatId = account.telegram_chat_id.toString().trim();
+  if (!chatId || chatId === 'unused' || chatId === '') {
+    logger.warn({ accountId: account.id, chatId }, "Invalid telegram_chat_id");
+    throw new Error(`Invalid telegram_chat_id for account ${account.id}`);
+  }
+
+  const payload = {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    disable_web_page_preview: !!opts.disable_web_page_preview
+  };
+
+  if (opts.reply_markup) {
+    payload.reply_markup = opts.reply_markup;
+  }
+
+  try {
+    await sendTelegram(chatId, payload);
+    logger.debug({ accountId: account.id, chatId }, "Message sent to account");
+  } catch (err) {
+    const status = err.response && err.response.status;
+    logger.error({ accountId: account.id, chatId, status, err: err.message }, "Failed to send to account");
+    throw err;
+  }
+}
+
 async function sendToAllTargets(text, opts = {}) {
   const targets = TELEGRAM_CHAT_IDS && TELEGRAM_CHAT_IDS.length ? TELEGRAM_CHAT_IDS : [];
   if (!targets.length) {
@@ -58,5 +92,5 @@ async function sendToAllTargets(text, opts = {}) {
   }
 }
 
-module.exports = { sendTelegram, sendToAllTargets };
+module.exports = { sendTelegram, sendToAllTargets, sendToAccount };
 
