@@ -1,7 +1,7 @@
 ﻿const Queue = require("bull");
 const redisClient = require("./services/redis");
 const { getVideoDetails, parseDurationToSeconds } = require("./services/youtube");
-const { sendToAllTargets } = require("./services/telegram");
+const { sendToAccount } = require("./services/telegram");
 const { dbQuery } = require("./services/db");
 const cache = require("./services/cache");
 const logger = require("./logger");
@@ -93,7 +93,7 @@ videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
     const pubAt = published || (details.snippet && details.snippet.publishedAt) || new Date().toISOString();
     await dbQuery("insert into videos (video_id, channel_id, published_at) values ($1,$2,$3) on conflict (video_id) do nothing", [videoId, channelId, pubAt]);
 
-    const accRes = await dbQuery("select a.id, a.name from accounts a join feeds f on f.account_id = a.id where f.channel_id = $1", [channelId]);
+    const accRes = await dbQuery("select a.id, a.name, a.telegram_chat_id from accounts a join feeds f on f.account_id = a.id where f.channel_id = $1", [channelId]);
     if (accRes.rowCount === 0) {
       logger.info({ channelId }, "no accounts subscribed");
       return;
@@ -102,15 +102,28 @@ videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
     // Use title from webhook for notification (more accurate + fresh)
     const displayTitle = title || (details.snippet && details.snippet.title) || "Unknown";
 
-    logger.info({ videoId, stage: 'notification', accounts: accRes.rowCount }, "Sending notifications");
+    // Filter accounts without valid telegram_chat_id
+    const validAccounts = accRes.rows.filter(acc => {
+      if (!acc.telegram_chat_id || acc.telegram_chat_id === 'unused' || acc.telegram_chat_id === '') {
+        logger.warn({ accountId: acc.id, accountName: acc.name, channelId }, "Skipping account without telegram_chat_id");
+        return false;
+      }
+      return true;
+    });
+
+    if (validAccounts.length === 0) {
+      logger.info({ channelId, totalAccounts: accRes.rowCount }, "No accounts with telegram_chat_id for this channel");
+      return;
+    }
+
+    logger.info({ videoId, stage: 'notification', accounts: validAccounts.length }, "Sending notifications");
 
     const url = `https://youtu.be/${videoId}`;
 
-    // Parallelize Telegram sends for better performance
-    const sendPromises = accRes.rows.map(acc => {
+    // Parallelize sends with better error handling
+    const sendPromises = validAccounts.map(acc => {
       const text = `[${escapeHtml(acc.name)}] New video: <b>${escapeHtml(displayTitle)}</b>\n${url}`;
 
-      // Create inline keyboard with protocol handler button
       const reply_markup = {
         inline_keyboard: [[
           {
@@ -120,13 +133,28 @@ videoQueue.process(2, async (job) => {  // Reduce from 5 to 2 workers
         ]]
       };
 
-      return sendToAllTargets(text, { reply_markup }).catch(e => {
-        logger.error({ err: e.message, videoId, account: acc.name }, "telegram send failed (worker)");
-        throw e; // let Bull retry
+      return sendToAccount(acc, text, { reply_markup }).catch(e => {
+        logger.error({ err: e.message, videoId, account: acc.name, accountId: acc.id }, "telegram send failed (worker)");
+        throw e;
       });
     });
 
-    await Promise.all(sendPromises);
+    // Use Promise.allSettled for better partial-failure handling
+    const results = await Promise.allSettled(sendPromises);
+    const failures = results.filter(r => r.status === 'rejected');
+
+    // Only fail the job if ALL sends failed (allows partial success)
+    if (failures.length === validAccounts.length) {
+      throw new Error(`Failed to send to all ${validAccounts.length} accounts`);
+    }
+
+    if (failures.length > 0) {
+      logger.warn({
+        videoId,
+        successCount: validAccounts.length - failures.length,
+        failureCount: failures.length
+      }, "Partial notification failure - some accounts notified successfully");
+    }
 
     const elapsed = Date.now() - startTime;
     logger.info({ videoId, elapsed, stage: 'complete' }, "Worker completed successfully");

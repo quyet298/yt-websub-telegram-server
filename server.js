@@ -6,6 +6,7 @@ const { PORT, HOST_URL, ADMIN_TOKEN } = require("./config");
 const Queue = require("bull");
 const { REDIS_URL } = require("./config");
 const { dbQuery } = require("./services/db");
+const { sendToAccount } = require("./services/telegram");
 
 const accountsRoutes = require("./routes/accounts");
 const webhookRoutes = require("./routes/webhook");
@@ -878,7 +879,6 @@ app.post("/admin/broadcast", adminAuth, async (req, res) => {
       });
     }
 
-    const { sendToAllTargets } = require('./services/telegram');
     const results = {
       total: accountsResult.rowCount,
       sent: 0,
@@ -889,7 +889,7 @@ app.post("/admin/broadcast", adminAuth, async (req, res) => {
     // Send to all accounts in parallel
     const sendPromises = accountsResult.rows.map(async (account) => {
       try {
-        await sendToAllTargets([account], message, null); // No reply_markup
+        await sendToAccount(account, message); // No reply_markup for broadcasts
         results.sent++;
         logger.info({ accountId: account.id, chatId: account.telegram_chat_id }, "Broadcast sent");
       } catch (err) {
